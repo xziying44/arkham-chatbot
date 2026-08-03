@@ -140,10 +140,12 @@ export class ChatBotSession {
 		senderName: string;
 		platformMessageId?: string;
 	}): Promise<{ text: string; replyToMessageId?: string; mentionUserOpenid?: string }> {
-		// 群消息带发送者前缀；私聊直接用正文。
+		// 群消息带发送者前缀（昵称 + openid），让 agent 能把昵称和稳定身份关联。
+		// openid 是该用户在本群的唯一稳定标识（昵称可改），记忆用户信息时必须记 openid。
+		// 私聊直接用正文（只有一个对话者）。
 		const isGroup = this.scope.kind === "group";
 		const formatted = isGroup
-			? `<${message.senderName}>: ${message.text}`
+			? `<${message.senderName} (${message.senderId})>: ${message.text}`
 			: message.text;
 
 		// 忙 → steer 注入，等当前 run 的回复（回复引用触发消息、@ 触发送者）。
