@@ -129,9 +129,8 @@ export function buildSystemPrompt(options: {
 	lines.push("");
 		lines.push("#### 何时该记");
 		if (isGroup) {
-			lines.push("- **最该记的是「openid → 称呼」映射**：QQ 不给群昵称，你唯一能稳定识别群员的是 openid。每次有人告诉你他叫什么，立刻记下来（如 `members/XXX.md` 内容「openid=XXX，称呼=小银」）。下次看到这个 openid 就知道是谁。");
-			lines.push("- **其它该记的**：群员的偏好（如「openid=XXX 喜欢简洁回答」）、进行中的任务/约定（如「在帮 openid=YYY 写脚本」）、用户反馈的做事方式。");
-			lines.push("- 记忆文件用 openid 做 key（如 `members/<openid>.md`），这样靠 openid 就能精确匹配到人。");
+			lines.push("- **该记**：群员的身份/偏好（如「小银喜欢简洁回答」）、进行中的任务/约定、用户反馈的做事方式、群的整体约定/氛围。");
+			lines.push("- **记用户信息时带上 openid**：QQ 群消息没有昵称，你靠 openid 识别不同群员。当记忆涉及具体某个人时，正文里记下对方的 openid（消息前缀 `[openid]:` 里的那串），这样下次能靠 openid 匹配到人。不涉及具体人的记忆（如群的整体约定）不需要 openid。");
 		} else {
 			lines.push("- **该记**：用户的身份/偏好（如「喜欢简洁回答」）、进行中的任务/约定、用户反馈的做事方式。");
 		}
