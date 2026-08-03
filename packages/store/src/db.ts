@@ -79,6 +79,15 @@ function migrate(db: DatabaseSync): void {
 			created_at  INTEGER NOT NULL,
 			expires_at  INTEGER NOT NULL
 		);
+
+		CREATE TABLE IF NOT EXISTS scope_labels (
+			bot_id      TEXT NOT NULL,
+			scope_kind  TEXT NOT NULL,
+			scope_id    TEXT NOT NULL,
+			label       TEXT NOT NULL,
+			updated_at  INTEGER NOT NULL,
+			PRIMARY KEY (bot_id, scope_kind, scope_id)
+		);
 	`);
 }
 

@@ -100,6 +100,26 @@ export class BotManager {
 		return join(this.opts.dataRoot, botId, kind, scopeId);
 	}
 
+	/** 列出某 bot 在磁盘上的所有 scope（扫描 group/ + user/ 目录）。 */
+	async listScopes(botId: string): Promise<{ kind: "group" | "user"; id: string }[]> {
+		const { readdir } = await import("node:fs/promises");
+		const botDir = this.botDataDir(botId);
+		const out: { kind: "group" | "user"; id: string }[] = [];
+		for (const kind of ["group", "user"] as const) {
+			const kindDir = join(botDir, kind);
+			let entries: import("node:fs").Dirent[];
+			try {
+				entries = await readdir(kindDir, { withFileTypes: true });
+			} catch {
+				continue;
+			}
+			for (const e of entries) {
+				if (e.isDirectory()) out.push({ kind, id: e.name });
+			}
+		}
+		return out;
+	}
+
 	/** 运行时新增并连接一个机器人。 */
 	async addBot(config: BotConfig): Promise<void> {
 		if (this.instances.has(config.id)) {

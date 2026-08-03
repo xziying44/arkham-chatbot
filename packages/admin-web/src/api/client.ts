@@ -68,12 +68,24 @@ export const api = {
     request<{ ok: boolean }>(`/api/bots/${botId}/sessions/${kind}/${scopeId}`, { method: "DELETE" }),
 
   // memories（审计）
+  listScopes: (botId: string) =>
+    request<{ items: { kind: "group" | "user"; id: string; label: string | null; memoryCount: number }[] }>(`/api/memories/${botId}/scopes`),
+  setScopeLabel: (botId: string, kind: string, scopeId: string, label: string) =>
+    request<{ ok: true }>(`/api/memories/${botId}/scopes/${kind}/${scopeId}/label`, { method: "PUT", body: JSON.stringify({ label }) }),
+  deleteScopeLabel: (botId: string, kind: string, scopeId: string) =>
+    request<{ ok: true }>(`/api/memories/${botId}/scopes/${kind}/${scopeId}/label`, { method: "DELETE" }),
   listMemories: (botId: string, kind: string, scopeId: string) =>
     request<{ index: string | null; files: { name: string; size: number }[] }>(`/api/memories/${botId}/${kind}/${scopeId}`),
   readMemory: (botId: string, kind: string, scopeId: string, name: string) =>
     request<string>(`/api/memories/${botId}/${kind}/${scopeId}/${name}`),
+  writeMemory: (botId: string, kind: string, scopeId: string, name: string, content: string) =>
+    request<{ ok: true }>(`/api/memories/${botId}/${kind}/${scopeId}/${name}`, { method: "PUT", body: content, headers: { "Content-Type": "text/plain" } }),
   deleteMemory: (botId: string, kind: string, scopeId: string, name: string) =>
     request<{ ok: true; note?: string }>(`/api/memories/${botId}/${kind}/${scopeId}/${name}`, { method: "DELETE" }),
+  clearMemories: (botId: string, kind: string, scopeId: string) =>
+    request<{ ok: true; note?: string }>(`/api/memories/${botId}/${kind}/${scopeId}/clear-memories`, { method: "POST" }),
+  clearHistory: (botId: string, kind: string, scopeId: string) =>
+    request<{ ok: true; note?: string }>(`/api/memories/${botId}/${kind}/${scopeId}/clear-history`, { method: "POST" }),
 
   // messages
   listMessages: (params: Record<string, string | number | undefined>) => {

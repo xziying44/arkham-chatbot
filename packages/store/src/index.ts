@@ -10,3 +10,5 @@ export { LogRepository, LEVEL_RANK } from "./logs.ts";
 export type { LogLevel, LogRecord, LogInsert, LogQuery } from "./logs.ts";
 export { AdminSessionRepository } from "./admin-sessions.ts";
 export type { AdminSessionRecord } from "./admin-sessions.ts";
+export { ScopeLabelRepository } from "./scope-labels.ts";
+export type { ScopeLabelRecord } from "./scope-labels.ts";

@@ -1,25 +1,75 @@
 import { Hono } from "hono";
-import { readdir, readFile, unlink, stat } from "node:fs/promises";
+import { readdir, readFile, unlink, stat, rm } from "node:fs/promises";
 import { join } from "node:path";
+import type { DatabaseSync } from "@arkham/chatbot-store";
+import { ScopeLabelRepository } from "@arkham/chatbot-store";
 import type { BotManagerLike } from "../contracts.ts";
 
 interface MemoryRoutesDeps {
+	readonly db: DatabaseSync;
 	readonly botManager: BotManagerLike;
 }
 
 /**
- * 记忆审计路由。
+ * 会话管理 + 记忆审计路由。
  *
- * 路径布局: <scopeDir>/workspace/memories/<文件>.md + MEMORY.md 索引。
- * 只读 + 删除（不提供新建/编辑——记忆是 agent 自管理的，管理端只做审计/清理）。
- *
- * 安全: 路径解析只取 basename，禁止目录穿越。
+ * - 列出某 bot 所有 scope（磁盘扫描）+ 备注
+ * - 设置/删除 scope 备注（32 位哈希起可读名）
+ * - 查看/删除记忆文件
+ * - 清除记忆目录 / 清除历史标记
  */
 export function createMemoryRoutes(deps: MemoryRoutesDeps): Hono {
 	const app = new Hono();
-	const { botManager } = deps;
+	const { db, botManager } = deps;
+	const labels = new ScopeLabelRepository(db);
 
-	/** 列出某 scope 的所有记忆文件 + 索引内容。 */
+	// ---- 会话列表（磁盘扫描 + 备注 + 记忆文件数）----
+	app.get("/:botId/scopes", async (c) => {
+		const botId = c.req.param("botId");
+		const scopes = await botManager.listScopes(botId);
+		const labelMap = new Map(labels.list(botId).map((l) => [`${l.scopeKind}:${l.scopeId}`, l.label]));
+		const items = await Promise.all(
+			scopes.map(async (s) => {
+				const scopeDir = botManager.getScopeDir(botId, s.kind, s.id);
+				const memDir = scopeDir ? join(scopeDir, "workspace", "memories") : null;
+				let memoryCount = 0;
+				if (memDir) {
+					try {
+						const files = await readdir(memDir);
+						memoryCount = files.filter((f) => f.endsWith(".md") && f !== "MEMORY.md").length;
+					} catch {
+						/* 无目录 */
+					}
+				}
+				return {
+					kind: s.kind,
+					id: s.id,
+					label: labelMap.get(`${s.kind}:${s.id}`) ?? null,
+					memoryCount,
+				};
+			}),
+		);
+		return c.json({ items });
+	});
+
+	// ---- 设置/更新 scope 备注 ----
+	app.put("/:botId/scopes/:kind/:scopeId/label", async (c) => {
+		const { botId, kind, scopeId } = c.req.param();
+		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
+		const body = (await c.req.json().catch(() => ({}))) as { label?: string };
+		if (!body.label?.trim()) return c.json({ error: "label 不能为空" }, 400);
+		labels.set(botId, kind as "group" | "user", scopeId, body.label.trim());
+		return c.json({ ok: true });
+	});
+
+	// ---- 删除 scope 备注 ----
+	app.delete("/:botId/scopes/:kind/:scopeId/label", (c) => {
+		const { botId, kind, scopeId } = c.req.param();
+		labels.delete(botId, kind, scopeId);
+		return c.json({ ok: true });
+	});
+
+	// ---- 列出某 scope 的记忆文件 + 索引 ----
 	app.get("/:botId/:kind/:scopeId", async (c) => {
 		const { botId, kind, scopeId } = c.req.param();
 		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
@@ -33,7 +83,6 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Hono {
 		} catch {
 			/* 无索引 */
 		}
-
 		let files: { name: string; size: number }[] = [];
 		try {
 			const entries = await readdir(memDir);
@@ -48,7 +97,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Hono {
 		return c.json({ index, files });
 	});
 
-	/** 读取某条记忆文件全文。 */
+	// ---- 读取某条记忆文件全文 ----
 	app.get("/:botId/:kind/:scopeId/:name", async (c) => {
 		const { botId, kind, scopeId } = c.req.param();
 		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
@@ -63,7 +112,25 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Hono {
 		}
 	});
 
-	/** 删除某条记忆文件。 */
+	// ---- 编辑记忆文件（写全文）----
+	app.put("/:botId/:kind/:scopeId/:name", async (c) => {
+		const { botId, kind, scopeId } = c.req.param();
+		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
+		const name = basename(c.req.param("name"));
+		const scopeDir = botManager.getScopeDir(botId, kind as "group" | "user", scopeId);
+		if (!scopeDir) return c.json({ error: "无法定位会话目录" }, 404);
+		const body = await c.req.text();
+		const { writeFile: wf, mkdir: mkd } = await import("node:fs/promises");
+		try {
+			await mkd(join(scopeDir, "workspace", "memories"), { recursive: true });
+			await wf(join(scopeDir, "workspace", "memories", name), body, "utf8");
+			return c.json({ ok: true });
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 500);
+		}
+	});
+
+	// ---- 删除某条记忆文件 ----
 	app.delete("/:botId/:kind/:scopeId/:name", async (c) => {
 		const { botId, kind, scopeId } = c.req.param();
 		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
@@ -72,16 +139,45 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Hono {
 		if (!scopeDir) return c.json({ error: "无法定位会话目录" }, 404);
 		try {
 			await unlink(join(scopeDir, "workspace", "memories", name));
-			return c.json({ ok: true, note: "已删除文件。注意：MEMORY.md 索引里的对应行需要 agent 下次激活时自行清理，或手动编辑。" });
+			return c.json({ ok: true });
 		} catch {
-			return c.json({ error: "文件不存在或无法删除" }, 404);
+			return c.json({ error: "文件不存在" }, 404);
+		}
+	});
+
+	// ---- 清除所有记忆文件（删 memories/ 目录内容，保留目录）----
+	app.post("/:botId/:kind/:scopeId/clear-memories", async (c) => {
+		const { botId, kind, scopeId } = c.req.param();
+		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
+		const scopeDir = botManager.getScopeDir(botId, kind as "group" | "user", scopeId);
+		if (!scopeDir) return c.json({ error: "无法定位会话目录" }, 404);
+		const memDir = join(scopeDir, "workspace", "memories");
+		try {
+			await rm(memDir, { recursive: true, force: true });
+			return c.json({ ok: true, note: "已清除所有记忆文件（memories/ 目录）" });
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 500);
+		}
+	});
+
+	// ---- 清除历史（写标记，下次激活不注入 session.jsonl）----
+	app.post("/:botId/:kind/:scopeId/clear-history", async (c) => {
+		const { botId, kind, scopeId } = c.req.param();
+		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
+		const scopeDir = botManager.getScopeDir(botId, kind as "group" | "user", scopeId);
+		if (!scopeDir) return c.json({ error: "无法定位会话目录" }, 404);
+		const { writeFile: wf } = await import("node:fs/promises");
+		try {
+			await wf(join(scopeDir, ".history_cleared"), String(Date.now()), "utf8");
+			return c.json({ ok: true, note: "已标记清除历史。下次会话激活时不注入 session.jsonl 历史记录（文件保留不删）。" });
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 500);
 		}
 	});
 
 	return app;
 }
 
-/** 只取 basename，防目录穿越。 */
 function basename(name: string): string {
 	const base = name.split("/").pop() ?? name;
 	return base.endsWith(".md") ? base : `${base}.md`;

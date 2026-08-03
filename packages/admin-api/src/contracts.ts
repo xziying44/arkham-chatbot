@@ -15,6 +15,14 @@ export interface BotManagerLike {
 	reapAllSessions(): Promise<number>;
 	/** 取某 bot 某 scope 在磁盘上的数据目录（审计记忆/历史用）。 */
 	getScopeDir(botId: string, kind: "group" | "user", scopeId: string): string | undefined;
+	/** 列出某 bot 在磁盘上的所有 scope（扫描 group/ + user/ 目录）。 */
+	listScopes(botId: string): Promise<{ kind: "group" | "user"; id: string }[]>;
+}
+
+/** 磁盘上扫出的 scope 信息。 */
+export interface ScopeDirInfo {
+	readonly kind: "group" | "user";
+	readonly id: string;
 }
 
 /** admin-api 需要的会话池能力（SessionManager 的子集）。 */

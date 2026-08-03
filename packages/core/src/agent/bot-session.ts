@@ -1,7 +1,7 @@
 import { type AgentMessage, type AgentTool, Agent, type StreamFn } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { buildSystemPrompt } from "./system-prompt.ts";
 import { createDefaultTools } from "../tools/index.ts";
@@ -72,9 +72,11 @@ export class ChatBotSession {
 	async activate(): Promise<void> {
 		await mkdir(join(this.opts.scopeDir, "workspace"), { recursive: true });
 		await this.memoryFiles.ensure();
-		// 并行加载：完整历史（pi 自带 compaction 会按需压缩）、会话摘要（memory.md）、记忆索引（MEMORY.md）。
+		// 检查「清除历史」标记：存在则本次不注入历史消息（session.jsonl 不删），然后消费标记。
+		const cleared = await this.consumeHistoryClearedFlag();
+		// 并行加载：历史（若被标记清除则注入空）、会话摘要、记忆索引。
 		const [previousMessages, sessionSummary, memoryIndex] = await Promise.all([
-			this.history.load(),
+			cleared ? Promise.resolve([]) : this.history.load(),
 			this.memory.load(),
 			this.memoryFiles.loadIndex(),
 		]);
@@ -203,6 +205,32 @@ export class ChatBotSession {
 
 	get debugId(): string {
 		return scopeKeyStr(this.scope);
+	}
+
+	/** 「清除历史」标记文件路径（沙箱外，agent 看不到也改不了）。 */
+	private get historyClearedFlagPath(): string {
+		return join(this.opts.scopeDir, ".history_cleared");
+	}
+
+	/**
+	 * 消费「清除历史」标记：存在则返回 true 并删除标记（一次性）。
+	 * 管理端调 setHistoryCleared() 写标记，下次激活时不注入历史消息。
+	 */
+	private async consumeHistoryClearedFlag(): Promise<boolean> {
+		try {
+			await unlink(this.historyClearedFlagPath);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * 写「清除历史」标记：下次激活时 consumeHistoryClearedFlag 会读到它，
+	 * 本次不注入 session.jsonl 历史（文件不删，只是不加载）。
+	 */
+	async setHistoryCleared(): Promise<void> {
+		await writeFile(this.historyClearedFlagPath, String(Date.now()), "utf8");
 	}
 }
 
