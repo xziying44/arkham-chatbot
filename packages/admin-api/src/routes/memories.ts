@@ -77,6 +77,14 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Hono {
 		if (!scopeDir) return c.json({ error: "无法定位会话目录" }, 404);
 		const memDir = join(scopeDir, "workspace", "memories");
 
+		// 会话摘要（memory.md，回收时自动生成，在 scopeDir 下不在 memories/ 内）。
+		let sessionSummary: string | null = null;
+		try {
+			sessionSummary = await readFile(join(scopeDir, "memory.md"), "utf8");
+		} catch {
+			/* 无摘要 */
+		}
+
 		let index: string | null = null;
 		try {
 			index = await readFile(join(memDir, "MEMORY.md"), "utf8");
@@ -94,7 +102,7 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Hono {
 		} catch {
 			/* 目录不存在 */
 		}
-		return c.json({ index, files });
+		return c.json({ sessionSummary, index, files });
 	});
 
 	// ---- 读取某条记忆文件全文 ----
@@ -170,6 +178,36 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Hono {
 		try {
 			await wf(join(scopeDir, ".history_cleared"), String(Date.now()), "utf8");
 			return c.json({ ok: true, note: "已标记清除历史。下次会话激活时不注入 session.jsonl 历史记录（文件保留不删）。" });
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 500);
+		}
+	});
+
+	// ---- 编辑会话摘要（memory.md）----
+	app.put("/:botId/:kind/:scopeId/summary", async (c) => {
+		const { botId, kind, scopeId } = c.req.param();
+		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
+		const scopeDir = botManager.getScopeDir(botId, kind as "group" | "user", scopeId);
+		if (!scopeDir) return c.json({ error: "无法定位会话目录" }, 404);
+		const body = await c.req.text();
+		const { writeFile: wf } = await import("node:fs/promises");
+		try {
+			await wf(join(scopeDir, "memory.md"), body, "utf8");
+			return c.json({ ok: true });
+		} catch (e) {
+			return c.json({ error: (e as Error).message }, 500);
+		}
+	});
+
+	// ---- 清除会话摘要（删 memory.md）----
+	app.post("/:botId/:kind/:scopeId/clear-summary", async (c) => {
+		const { botId, kind, scopeId } = c.req.param();
+		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
+		const scopeDir = botManager.getScopeDir(botId, kind as "group" | "user", scopeId);
+		if (!scopeDir) return c.json({ error: "无法定位会话目录" }, 404);
+		try {
+			await unlink(join(scopeDir, "memory.md")).catch(() => {});
+			return c.json({ ok: true, note: "已删除会话摘要（memory.md）。下次激活不再加载上次会话摘要。" });
 		} catch (e) {
 			return c.json({ error: (e as Error).message }, 500);
 		}
