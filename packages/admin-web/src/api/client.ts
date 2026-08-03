@@ -16,11 +16,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     ...init,
   });
-  if (res.status === 401) {
-    // 未登录/会话过期：跳登录页。
-    window.location.hash = "#/login";
-    throw new ApiError(401, "未登录");
-  }
   const text = await res.text();
   let body: unknown = null;
   if (text) {
@@ -31,7 +26,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
   if (!res.ok) {
-    const msg = (body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : `HTTP ${res.status}`);
+    const msg = body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : `HTTP ${res.status}`;
+    // 仅在「需要登录的接口」上 401 才跳登录页。
+    // /api/auth/login 的 401 是「用户名或密码错误」，必须把错误抛给登录页显示，不能跳转。
+    if (res.status === 401 && !path.startsWith("/api/auth/login")) {
+      window.location.hash = "#/login";
+    }
     throw new ApiError(res.status, msg);
   }
   return body as T;
