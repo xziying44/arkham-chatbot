@@ -182,14 +182,20 @@ export class ChatBotSession {
 	 *
 	 * 摘要由 agent 基于自己的完整上下文（系统提示词+记忆+对话历史）自行生成，
 	 * 而非外部 generateSummary——agent 最清楚哪些重要、该带什么到下次。
-	 * 给 agent 发一条「请总结」的消息，收集它的回复文本作为 memory.md 内容。
+	 *
+	 * 注意：总结这段对话（"请总结" + agent 回复）**不存入 session.jsonl**——
+	 * 在发总结消息前快照 messages，用快照落盘，避免下次加载时混入总结对话。
+	 * 总结只写 memory.md。
 	 */
 	async dispose(): Promise<void> {
 		try {
+			// 先快照当前 messages（不含即将发生的总结对话）。
+			const historySnapshot = this.agent.state.messages.slice();
 			// 让 agent 自己总结当前会话。它带着完整上下文，知道该保留什么。
 			const summary = await this.summarizeSelf();
 			if (summary) await this.memory.save(summary);
-			await this.history.save(this.agent.state.messages);
+			// 用快照落盘——不包含总结这段对话。
+			await this.history.save(historySnapshot);
 		} finally {
 			this.agent.abort();
 			await this.agent.waitForIdle().catch(() => {});
