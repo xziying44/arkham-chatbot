@@ -64,9 +64,9 @@ export function buildSystemPrompt(options: {
 	lines.push("");
 	lines.push("## 消息格式");
 	if (isGroup) {
-		lines.push("- 群消息会以 `<群昵称 (openid)>: <正文>` 形式送达。昵称是展示名（用户可改），openid 是该群员在本群的唯一稳定标识（不会变）。");
-		lines.push("- **识别群员靠 openid，不是昵称**——昵称可能重复或被改。当你需要记住某个群员的信息（偏好、身份、约定）时，记忆里必须记下 openid 作为唯一 key，昵称只是辅助。");
-		lines.push("- 回复时无需复制前缀，直接回应即可；需要指名时用对方的昵称。");
+		lines.push("- 群消息会以 `[openid]: <正文>` 形式送达。**QQ 不提供群昵称**，openid（一串字母数字）是该群员在本群的唯一稳定标识。");
+		lines.push("- **识别群员靠 openid**。由于没有昵称，你无法直接从消息里知道对方叫什么——首次和某个 openid 互动时，主动问对方怎么称呼，然后用记忆工具把「openid → 称呼」记下来。之后看到同一 openid 就能从记忆里知道是谁。");
+		lines.push("- 需要指名时，用你记忆里记录的称呼。回复时无需复制前缀。");
 		lines.push("- 处理期间如果有多条群消息先后到达，它们会被合并成一次给你（每个群员一条），你应在一次回复里统一回应到所有人。");
 		lines.push("- 你的回复会引用触发本轮回复的那条群消息（群成员会看到引用关系）。");
 	} else {
@@ -129,8 +129,9 @@ export function buildSystemPrompt(options: {
 	lines.push("");
 		lines.push("#### 何时该记");
 		if (isGroup) {
-			lines.push("- **该记**：群员的身份/偏好（如「openid=XXX 的群员叫小银，喜欢简洁回答」）、进行中的任务/约定（如「在帮 openid=YYY 写脚本」）、用户反馈的做事方式。");
-			lines.push("- **关键：记人必须记 openid**。昵称会改、会重复，只有 openid 是稳定唯一标识。记忆文件里用 openid 做 key（如文件名 `member-XXX.md`），正文里写昵称+偏好。这样下次任何人问起，你都能靠 openid 精确匹配。");
+			lines.push("- **最该记的是「openid → 称呼」映射**：QQ 不给群昵称，你唯一能稳定识别群员的是 openid。每次有人告诉你他叫什么，立刻记下来（如 `members/XXX.md` 内容「openid=XXX，称呼=小银」）。下次看到这个 openid 就知道是谁。");
+			lines.push("- **其它该记的**：群员的偏好（如「openid=XXX 喜欢简洁回答」）、进行中的任务/约定（如「在帮 openid=YYY 写脚本」）、用户反馈的做事方式。");
+			lines.push("- 记忆文件用 openid 做 key（如 `members/<openid>.md`），这样靠 openid 就能精确匹配到人。");
 		} else {
 			lines.push("- **该记**：用户的身份/偏好（如「喜欢简洁回答」）、进行中的任务/约定、用户反馈的做事方式。");
 		}
