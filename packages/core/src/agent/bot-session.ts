@@ -44,6 +44,13 @@ export class ChatBotSession {
 	private readonly tools: AgentTool[];
 	/** 激活时构建并缓存，供管理端只读查看。 */
 	private systemPromptCache: string | undefined;
+	/**
+	 * 群消息合并注入的「触发消息」：当前 prompt run 是由哪条群消息触发的。
+	 * steer 进来的新消息不会开新 run，回复应引用「触发这条 run 的消息」。
+	 * 由 prompt() 写入、run 结束后读取。
+	 */
+	private triggerMessageId: string | undefined;
+	private runInFlight: Promise<string> | undefined;
 
 	constructor(opts: BotSessionOptions) {
 		this.opts = opts;
@@ -74,6 +81,8 @@ export class ChatBotSession {
 			},
 			streamFn: this.opts.streamFn,
 		});
+		// 群聊消息合并：steer 队列设为 "all"，drain 时把积攒的所有消息一次性注入。
+		this.agent.steeringMode = "all";
 		console.log(`[bot] activate scope=${this.opts.scope.kind}:${this.opts.scope.id} tools=[${this.tools.map((t) => t.name).join(",")}]`);
 	}
 
@@ -88,23 +97,65 @@ export class ChatBotSession {
 	}
 
 	/**
-	 * 处理一条入站消息，返回完整回复文本。
-	 * 收集 assistant 的文本内容拼接；若 Agent 末轮无文本产出（例如只调了工具），
-	 * 返回空串，由上层决定是否补一句默认回复。
+	 * 是否正在处理（有 in-flight 的 prompt run）。
+	 * SessionManager 据此决定：idle → 开新 prompt；busy → steer 注入。
 	 */
+	get isBusy(): boolean {
+		return this.runInFlight !== undefined;
+	}
+
 	/**
-	 * 处理一条入站消息，返回完整回复文本。
-	 * @param replyToMsgId 当前入站消息的平台 id，供 send_image 等工具作为被动回复引用。
+	 * 处理一条入站消息。
+	 *
+	 * 群聊合并语义：
+	 * - 若 agent 空闲 → 开新 run（agent.prompt），记录 triggerMessageId。
+	 * - 若 agent 忙 → agent.steer 注入（mode=all），等当前 run 结束后批量 drain。
+	 *   steer 的消息不改变 triggerMessageId（回复仍引用触发当前 run 的那条消息）。
+	 *
+	 * 群消息文本会带发送者前缀（`<昵称>: <正文>`），让 agent 识别是谁在说话。
+	 * 私聊不带头缀（只有一个对话者）。
+	 *
+	 * @returns 回复文本 + 该回复应引用的消息 id（触发 run 的那条）。
 	 */
-	async prompt(text: string, replyToMsgId?: string): Promise<string> {
-		if (this.opts.replyToHolder) this.opts.replyToHolder.current = replyToMsgId;
+	async prompt(message: {
+		text: string;
+		senderId: string;
+		senderName: string;
+		platformMessageId?: string;
+	}): Promise<{ text: string; replyToMessageId?: string }> {
+		// 群消息带发送者前缀；私聊直接用正文。
+		const isGroup = this.scope.kind === "group";
+		const formatted = isGroup
+			? `<${message.senderName}>: ${message.text}`
+			: message.text;
+
+		// 忙 → steer 注入，等当前 run 的回复（回复引用触发消息）。
+		if (this.runInFlight) {
+			this.agent.steer({ role: "user", content: formatted, timestamp: Date.now() });
+			return this.runInFlight.then((text) => ({ text, replyToMessageId: this.triggerMessageId }));
+		}
+
+		// 空闲 → 开新 run。
+		this.triggerMessageId = message.platformMessageId;
+		if (this.opts.replyToHolder) this.opts.replyToHolder.current = message.platformMessageId;
+		this.runInFlight = this.runPrompt(formatted);
+		try {
+			const text = await this.runInFlight;
+			return { text, replyToMessageId: this.triggerMessageId };
+		} finally {
+			this.runInFlight = undefined;
+			if (this.opts.replyToHolder) this.opts.replyToHolder.current = undefined;
+		}
+	}
+
+	/** 实际跑一次 agent.prompt，收集 assistant 文本。 */
+	private async runPrompt(formattedText: string): Promise<string> {
 		const collector = new AssistantTextCollector();
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
 		try {
-			await this.agent.prompt(text);
+			await this.agent.prompt(formattedText);
 		} finally {
 			unsubscribe();
-			if (this.opts.replyToHolder) this.opts.replyToHolder.current = undefined;
 		}
 		return collector.text;
 	}

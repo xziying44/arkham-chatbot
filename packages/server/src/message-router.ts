@@ -56,7 +56,9 @@ export function createMessageRouter(opts: MessageRouterOptions) {
 		try {
 			const reply = await sessions.dispatch(incoming);
 			if (reply.text) {
-				await adapter.sendText(event.scope, reply.text, event.platformMessageId);
+				// 用 dispatch 返回的 replyToMessageId（触发 run 的那条群消息），
+				// 而非当前 event 的 messageId——群消息合并时可能不同。
+				await adapter.sendText(event.scope, reply.text, reply.replyToMessageId ?? event.platformMessageId);
 				// 出站落库。
 				try {
 					messages?.insert({

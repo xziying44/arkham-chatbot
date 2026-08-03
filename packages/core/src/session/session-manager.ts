@@ -42,8 +42,6 @@ export interface SessionManagerOptions {
 
 interface ActiveEntry {
 	readonly session: ChatBotSession;
-	/** 串行化该 scope 的消息处理；每个新消息挂在新 promise 上保持链式。 */
-	queue: Promise<OutgoingMessage>;
 	lastActivityAt: number;
 	/** 回收定时器。 */
 	reaper: ReturnType<typeof setTimeout>;
@@ -86,7 +84,12 @@ export class SessionManager {
 
 	/**
 	 * 路由一条入站消息到对应 scope 的会话，返回出站回复。
-	 * 自动按需激活、串行排队、刷新 TTL。
+	 *
+	 * 群聊消息合并语义（见 ChatBotSession.prompt）：
+	 * - agent 空闲 → 开新 run，回复引用本条消息。
+	 * - agent 忙 → steer 注入（mode=all），等当前 run 结束，回复引用触发 run 的消息。
+	 * 因此多条快速连发的群消息，只在首条开 run，后续 steer 进去批量合并，
+	 * 一次 LLM 调用看到所有新消息统一回应——贴近群聊体感。
 	 */
 	async dispatch(message: IncomingMessage): Promise<OutgoingMessage> {
 		if (this.shuttingDown) {
@@ -97,13 +100,13 @@ export class SessionManager {
 		// 刷新回收定时器：有新消息则推迟回收。
 		this.resetReaper(entry);
 
-		const myTurn = entry.queue.then(
-			() => this.runTurn(entry, message),
-			() => this.runTurn(entry, message),
-		);
-		// 把新 promise 挂回 queue，保持串行链。失败也吞掉以免断链。
-		entry.queue = myTurn.catch(() => ({ text: "" }));
-		return myTurn;
+		const result = await entry.session.prompt({
+			text: message.text,
+			senderId: message.senderId,
+			senderName: message.senderName,
+			platformMessageId: message.platformMessageId,
+		});
+		return { text: result.text || "（处理完成，但没有文字回复。）", replyToMessageId: result.replyToMessageId };
 	}
 
 	/** 关闭所有会话：回收记忆 + 落盘，停止扫描器。 */
@@ -147,19 +150,12 @@ export class SessionManager {
 
 		const entry: ActiveEntry = {
 			session,
-			queue: Promise.resolve({ text: "" }),
 			lastActivityAt: Date.now(),
 			reaper: undefined as unknown as ReturnType<typeof setTimeout>,
 		};
 		this.resetReaper(entry);
 		this.active.set(key, entry);
 		return entry;
-	}
-
-	/** 执行单轮：prompt → 拼回复。 */
-	private async runTurn(entry: ActiveEntry, message: IncomingMessage): Promise<OutgoingMessage> {
-		const text = await entry.session.prompt(message.text, message.platformMessageId);
-		return { text: text || "（处理完成，但没有文字回复。）", replyToMessageId: message.platformMessageId };
 	}
 
 	private resetReaper(entry: ActiveEntry): void {
