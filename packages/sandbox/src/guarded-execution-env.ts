@@ -1,0 +1,90 @@
+import type { ExecutionEnv, ShellExecOptions } from "@earendil-works/pi-agent-core";
+import { reviewCommand } from "./command-guard.ts";
+
+/**
+ * 命令审查包装器：在任何 {@link ExecutionEnv} 之上拦截 exec，执行前先过安全审查。
+ *
+ * 文件系统方法（read/write/listDir 等）原样透传——它们作用于每群持久工作目录，
+ * 且 read 工具只读文本，无需额外拦截。只对 shell exec 做命令模式审查。
+ *
+ * 用法（env-factory 里）：所有由工厂产出的 env 都套一层 GuardedExecutionEnv，
+ * 保证生产（bwrap）和开发（NodeExecutionEnv）统一获得命令护栏。
+ */
+export class GuardedExecutionEnv implements ExecutionEnv {
+	private readonly inner: ExecutionEnv;
+	/** cwd 透传给被包装 env（接口要求可读写的 cwd 属性）。 */
+	cwd: string;
+
+	constructor(inner: ExecutionEnv) {
+		this.inner = inner;
+		this.cwd = inner.cwd;
+	}
+
+	/** exec 是唯一拦截点：审查通过才透传给被包装 env。 */
+	exec(command: string, options?: ShellExecOptions) {
+		const decision = reviewCommand(command);
+		if (!decision.allowed) {
+			// 返回"成功执行但被策略拒绝"的结果，让 agent 看到明确拒绝原因，
+			// 而非当成系统错误（错误可能让 agent 重试或绕路）。
+			return Promise.resolve({
+				ok: true as const,
+				value: {
+					stdout: "",
+					stderr: `🚫 ${decision.reason}\n`,
+					exitCode: 126, // 126 借用语义：command found but not executable
+				},
+			});
+		}
+		return this.inner.exec(command, options);
+	}
+
+	// ---- 文件系统方法：透传 ----
+	absolutePath(path: string, abortSignal?: AbortSignal) {
+		return this.inner.absolutePath(path, abortSignal);
+	}
+	joinPath(parts: string[], abortSignal?: AbortSignal) {
+		return this.inner.joinPath(parts, abortSignal);
+	}
+	readTextFile(path: string, abortSignal?: AbortSignal) {
+		return this.inner.readTextFile(path, abortSignal);
+	}
+	readTextLines(path: string, options?: { maxLines?: number; abortSignal?: AbortSignal }) {
+		return this.inner.readTextLines(path, options);
+	}
+	readBinaryFile(path: string, abortSignal?: AbortSignal) {
+		return this.inner.readBinaryFile(path, abortSignal);
+	}
+	writeFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal) {
+		return this.inner.writeFile(path, content, abortSignal);
+	}
+	appendFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal) {
+		return this.inner.appendFile(path, content, abortSignal);
+	}
+	fileInfo(path: string, abortSignal?: AbortSignal) {
+		return this.inner.fileInfo(path, abortSignal);
+	}
+	listDir(path: string, abortSignal?: AbortSignal) {
+		return this.inner.listDir(path, abortSignal);
+	}
+	canonicalPath(path: string, abortSignal?: AbortSignal) {
+		return this.inner.canonicalPath(path, abortSignal);
+	}
+	exists(path: string, abortSignal?: AbortSignal) {
+		return this.inner.exists(path, abortSignal);
+	}
+	createDir(path: string, options?: { recursive?: boolean; abortSignal?: AbortSignal }) {
+		return this.inner.createDir(path, options);
+	}
+	remove(path: string, options?: { recursive?: boolean; force?: boolean; abortSignal?: AbortSignal }) {
+		return this.inner.remove(path, options);
+	}
+	createTempDir(prefix?: string, abortSignal?: AbortSignal) {
+		return this.inner.createTempDir(prefix, abortSignal);
+	}
+	createTempFile(options?: { prefix?: string; suffix?: string; abortSignal?: AbortSignal }) {
+		return this.inner.createTempFile(options);
+	}
+	async cleanup(): Promise<void> {
+		await this.inner.cleanup?.();
+	}
+}
