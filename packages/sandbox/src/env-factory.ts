@@ -17,6 +17,12 @@ export interface EnvFactoryOptions {
 	readonly timeoutSeconds?: number;
 	/** shell 路径（可选）。 */
 	readonly shellPath?: string;
+	/**
+	 * 额外只读挂载（host 路径 → 沙箱内路径）。用于把历史归档等目录
+	 * 只读挂载到沙箱内，让 agent 能 read 查阅但无法篡改。
+	 * 生产 bwrap 用 --ro-bind；开发回退（NodeExecutionEnv）忽略（文件本就在宿主同路径）。
+	 */
+	readonly readOnlyBinds?: readonly (readonly [string, string])[];
 }
 
 /**
@@ -36,6 +42,7 @@ export function createExecutionEnv(options: EnvFactoryOptions): ExecutionEnv {
 				workspace: options.cwd,
 				networkDisabled: options.networkDisabled ?? true,
 				shellPath: options.shellPath,
+				readOnlyBinds: options.readOnlyBinds,
 			})
 		: new NodeExecutionEnv({ cwd: options.cwd, shellPath: options.shellPath });
 	return new GuardedExecutionEnv(base);

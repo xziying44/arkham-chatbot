@@ -20,7 +20,7 @@ export interface SessionManagerOptions {
 	/** 流式调用函数，通常为 `models.streamSimple.bind(models)`。 */
 	readonly streamFn: StreamFn;
 	/** 为每个 scope 创建沙箱执行环境（注入 cwd）。 */
-	readonly envFactory: (scope: ScopeKey, workspaceDir: string) => ExecutionEnv;
+	readonly envFactory: (scope: ScopeKey, workspaceDir: string, scopeDir: string) => ExecutionEnv;
 	/** 无活动回收阈值（毫秒），默认 1 小时。 */
 	readonly ttlMs?: number;
 	/** 回收器扫描间隔（毫秒），默认 1 分钟。 */
@@ -133,7 +133,7 @@ export class SessionManager {
 
 		const scopeDir = `${this.opts.dataDir}/${scope.kind}/${scope.id}`;
 		const workspaceDir = `${scopeDir}/workspace`;
-		const env = this.opts.envFactory(scope, workspaceDir);
+		const env = this.opts.envFactory(scope, workspaceDir, scopeDir);
 		// 共享 holder：factory 创建的工具读它，ChatBotSession.prompt 写它。
 		// 让 send_image 等工具能拿到当前被动消息 id（群消息发图必须带 msg_id）。
 		const replyToHolder: { current?: string } = {};

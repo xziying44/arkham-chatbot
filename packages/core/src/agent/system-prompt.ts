@@ -136,8 +136,11 @@ export function buildSystemPrompt(options: {
 	} else {
 		lines.push("");
 		lines.push("目前 `memories/` 为空（或无索引）。发现值得长期记住的事时，创建记忆文件并维护索引。");
-	}
-	lines.push("");
+		}
+		lines.push("");
+		lines.push("### 历史对话归档（只读）");
+		lines.push("工作目录下有 `history/` 目录，按天归档了过往的对话记录（`history/YYYY-MM-DD.jsonl`，每行一条 JSON 消息）。这是**只读**的——你可以用 read 工具查阅某天的对话，但不能修改。当用户问「之前聊过什么」「上次说的那个事」时，去 history/ 里翻对应日期的文件。");
+		lines.push("");
 		lines.push("#### 何时该记");
 		if (isGroup) {
 			lines.push("- **该记**：群员的身份/偏好（如「小银喜欢简洁回答」）、进行中的任务/约定、用户反馈的做事方式、群的整体约定/氛围。");

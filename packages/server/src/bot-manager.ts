@@ -213,12 +213,14 @@ export class BotManager {
 			model: this.opts.model,
 			models: this.opts.models,
 			streamFn: this.opts.streamFn,
-			envFactory: (_scope, workspaceDir) =>
+			envFactory: (_scope, workspaceDir, scopeDir) =>
 				createExecutionEnv({
 					enabled: this.opts.sandbox.enabled,
 					cwd: workspaceDir,
 					networkDisabled: this.opts.sandbox.networkDisabled,
 					timeoutSeconds: this.opts.sandbox.timeoutSeconds,
+					// 历史归档只读挂载到沙箱内 workspace/history/，agent 可查阅但无法篡改。
+					readOnlyBinds: [[`${scopeDir}/history`, `${workspaceDir}/history`]],
 				}),
 			ttlMs: this.opts.sessionTtlMs,
 			reaperIntervalMs: this.opts.reaperIntervalMs,

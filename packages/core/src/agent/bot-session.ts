@@ -196,6 +196,8 @@ export class ChatBotSession {
 			if (summary) await this.memory.save(summary);
 			// 用快照落盘——不包含总结这段对话。
 			await this.history.save(historySnapshot);
+			// 按天归档到 history/YYYY-MM-DD.jsonl（长期累积，只读挂载到沙箱供 agent 查阅）。
+			await this.history.archiveByDay(historySnapshot);
 		} finally {
 			this.agent.abort();
 			await this.agent.waitForIdle().catch(() => {});
