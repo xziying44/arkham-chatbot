@@ -46,14 +46,14 @@ export default function Layout() {
           onClick={({ key }) => nav(key)}
         />
       </Sider>
-      <AntLayout>
-        <Header style={{ background: "#fff", padding: "0 24px", display: "flex", justifyContent: "flex-end", alignItems: "center" }}>
+      <AntLayout style={{ background: "#fff" }}>
+        <Header style={{ background: "#fff", padding: "0 24px", display: "flex", justifyContent: "flex-end", alignItems: "center", borderBottom: "1px solid #f0f0f0", height: 48, lineHeight: "48px" }}>
           <Space>
             <Typography.Text>{username}</Typography.Text>
             <Button size="small" onClick={logout}>退出</Button>
           </Space>
         </Header>
-        <Content style={{ margin: 16, padding: 24, background: "#fff", borderRadius: 8, minHeight: 360 }}>
+        <Content style={{ padding: 24, background: "#fff", minHeight: 360, overflow: "auto" }}>
           <Outlet />
         </Content>
       </AntLayout>
