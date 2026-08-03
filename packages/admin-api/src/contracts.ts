@@ -13,6 +13,8 @@ export interface BotManagerLike {
 	enable(id: string, config: BotConfigInput): Promise<void>;
 	removeBot(id: string, deleteData: boolean): Promise<void>;
 	reapAllSessions(): Promise<number>;
+	/** 取某 bot 某 scope 在磁盘上的数据目录（审计记忆/历史用）。 */
+	getScopeDir(botId: string, kind: "group" | "user", scopeId: string): string | undefined;
 }
 
 /** admin-api 需要的会话池能力（SessionManager 的子集）。 */

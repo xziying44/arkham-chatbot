@@ -67,6 +67,14 @@ export const api = {
   forceReap: (botId: string, kind: string, scopeId: string) =>
     request<{ ok: boolean }>(`/api/bots/${botId}/sessions/${kind}/${scopeId}`, { method: "DELETE" }),
 
+  // memories（审计）
+  listMemories: (botId: string, kind: string, scopeId: string) =>
+    request<{ index: string | null; files: { name: string; size: number }[] }>(`/api/memories/${botId}/${kind}/${scopeId}`),
+  readMemory: (botId: string, kind: string, scopeId: string, name: string) =>
+    request<string>(`/api/memories/${botId}/${kind}/${scopeId}/${name}`),
+  deleteMemory: (botId: string, kind: string, scopeId: string, name: string) =>
+    request<{ ok: true; note?: string }>(`/api/memories/${botId}/${kind}/${scopeId}/${name}`, { method: "DELETE" }),
+
   // messages
   listMessages: (params: Record<string, string | number | undefined>) => {
     const qs = new URLSearchParams();

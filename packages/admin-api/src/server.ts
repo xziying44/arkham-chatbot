@@ -17,6 +17,7 @@ import { createSessionsRoutes } from "./routes/sessions.ts";
 import { createMessagesRoutes } from "./routes/messages.ts";
 import { createLogsRoutes } from "./routes/logs.ts";
 import { createSettingsRoutes } from "./routes/settings.ts";
+import { createMemoryRoutes } from "./routes/memories.ts";
 
 export interface AdminServerOptions {
 	readonly db: DatabaseSync;
@@ -108,6 +109,7 @@ export async function startAdminServer(opts: AdminServerOptions): Promise<AdminS
 	app.route("/api/messages", createMessagesRoutes({ db }));
 	app.route("/api/logs", createLogsRoutes({ db, logBus }));
 	app.route("/api/settings", createSettingsRoutes({ db, botManager }));
+	app.route("/api/memories", createMemoryRoutes({ botManager }));
 
 	// ---- 静态文件（admin-web SPA）----
 	if (webDistDir) {

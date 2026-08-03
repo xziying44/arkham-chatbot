@@ -11,6 +11,7 @@ const menuItems = [
   { key: "/sessions", label: "会话" },
   { key: "/messages", label: "消息" },
   { key: "/logs", label: "日志" },
+  { key: "/memories", label: "记忆" },
   { key: "/prompts", label: "提示词" },
   { key: "/settings", label: "设置" },
 ];

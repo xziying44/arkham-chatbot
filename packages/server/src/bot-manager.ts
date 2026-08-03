@@ -92,6 +92,14 @@ export class BotManager {
 		return this.instances.get(id);
 	}
 
+	/**
+	 * 取某 bot 某 scope 在磁盘上的数据目录（审计记忆/历史用）。
+	 * 路径: <dataRoot>/<botId>/<kind>/<scopeId>。bot 不存在也返回路径（磁盘数据可能还在）。
+	 */
+	getScopeDir(botId: string, kind: "group" | "user", scopeId: string): string {
+		return join(this.opts.dataRoot, botId, kind, scopeId);
+	}
+
 	/** 运行时新增并连接一个机器人。 */
 	async addBot(config: BotConfig): Promise<void> {
 		if (this.instances.has(config.id)) {
