@@ -50,6 +50,8 @@ export class ChatBotSession {
 	 * 由 prompt() 写入、run 结束后读取。
 	 */
 	private triggerMessageId: string | undefined;
+	/** 触发当前 run 的群消息发送者 openid（回复时 @ 那个人）。 */
+	private triggerSenderOpenid: string | undefined;
 	private runInFlight: Promise<string> | undefined;
 
 	constructor(opts: BotSessionOptions) {
@@ -116,33 +118,35 @@ export class ChatBotSession {
 	 * 群消息文本会带发送者前缀（`<昵称>: <正文>`），让 agent 识别是谁在说话。
 	 * 私聊不带头缀（只有一个对话者）。
 	 *
-	 * @returns 回复文本 + 该回复应引用的消息 id（触发 run 的那条）。
+	 * @returns 回复文本 + 该回复应引用的消息 id + 触发消息发送者的 openid（群消息 @ 人用）。
 	 */
 	async prompt(message: {
 		text: string;
 		senderId: string;
 		senderName: string;
 		platformMessageId?: string;
-	}): Promise<{ text: string; replyToMessageId?: string }> {
+	}): Promise<{ text: string; replyToMessageId?: string; mentionUserOpenid?: string }> {
 		// 群消息带发送者前缀；私聊直接用正文。
 		const isGroup = this.scope.kind === "group";
 		const formatted = isGroup
 			? `<${message.senderName}>: ${message.text}`
 			: message.text;
 
-		// 忙 → steer 注入，等当前 run 的回复（回复引用触发消息）。
+		// 忙 → steer 注入，等当前 run 的回复（回复引用触发消息、@ 触发送者）。
 		if (this.runInFlight) {
 			this.agent.steer({ role: "user", content: formatted, timestamp: Date.now() });
-			return this.runInFlight.then((text) => ({ text, replyToMessageId: this.triggerMessageId }));
+			return this.runInFlight.then((text) => ({ text, replyToMessageId: this.triggerMessageId, mentionUserOpenid: this.triggerSenderOpenid }));
 		}
 
 		// 空闲 → 开新 run。
 		this.triggerMessageId = message.platformMessageId;
+		// 群消息记录发送者 openid，回复时用它 @ 那个人。
+		this.triggerSenderOpenid = isGroup ? message.senderId : undefined;
 		if (this.opts.replyToHolder) this.opts.replyToHolder.current = message.platformMessageId;
 		this.runInFlight = this.runPrompt(formatted);
 		try {
 			const text = await this.runInFlight;
-			return { text, replyToMessageId: this.triggerMessageId };
+			return { text, replyToMessageId: this.triggerMessageId, mentionUserOpenid: this.triggerSenderOpenid };
 		} finally {
 			this.runInFlight = undefined;
 			if (this.opts.replyToHolder) this.opts.replyToHolder.current = undefined;

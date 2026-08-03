@@ -53,12 +53,18 @@ export function createMessageRouter(opts: MessageRouterOptions) {
 			logger?.warn("入站消息落库失败", { botId, error: (e as Error).message });
 		}
 
-		try {
-			const reply = await sessions.dispatch(incoming);
-			if (reply.text) {
-				// 用 dispatch 返回的 replyToMessageId（触发 run 的那条群消息），
-				// 而非当前 event 的 messageId——群消息合并时可能不同。
-				await adapter.sendText(event.scope, reply.text, reply.replyToMessageId ?? event.platformMessageId);
+			try {
+				const reply = await sessions.dispatch(incoming);
+				if (reply.text) {
+					// 用 dispatch 返回的 replyToMessageId（触发 run 的那条群消息），
+					// 而非当前 event 的 messageId——群消息合并时可能不同。
+					// mentionUserOpenid 让群消息回复 @ 触发送者。
+					await adapter.sendText(
+						event.scope,
+						reply.text,
+						reply.replyToMessageId ?? event.platformMessageId,
+						reply.mentionUserOpenid,
+					);
 				// 出站落库。
 				try {
 					messages?.insert({

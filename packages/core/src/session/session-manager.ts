@@ -106,7 +106,11 @@ export class SessionManager {
 			senderName: message.senderName,
 			platformMessageId: message.platformMessageId,
 		});
-		return { text: result.text || "（处理完成，但没有文字回复。）", replyToMessageId: result.replyToMessageId };
+		return {
+			text: result.text || "（处理完成，但没有文字回复。）",
+			replyToMessageId: result.replyToMessageId,
+			mentionUserOpenid: result.mentionUserOpenid,
+		};
 	}
 
 	/** 关闭所有会话：回收记忆 + 落盘，停止扫描器。 */
