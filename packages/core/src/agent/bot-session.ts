@@ -7,6 +7,7 @@ import { buildSystemPrompt } from "./system-prompt.ts";
 import { createDefaultTools } from "../tools/index.ts";
 import { HistoryStore } from "../session/history.ts";
 import { MemoryStore } from "../session/memory.ts";
+import { MemoryFiles } from "../session/memory-files.ts";
 import type { ScopeKey } from "../identity/scope.ts";
 import { scopeKeyStr } from "../identity/scope.ts";
 
@@ -40,6 +41,8 @@ export class ChatBotSession {
 	private readonly opts: BotSessionOptions;
 	private readonly history: HistoryStore;
 	private readonly memory: MemoryStore;
+	/** 文件式自管理记忆（memories/ 目录 + MEMORY.md 索引）。 */
+	private readonly memoryFiles: MemoryFiles;
 	private agent!: Agent;
 	private readonly tools: AgentTool[];
 	/** 激活时构建并缓存，供管理端只读查看。 */
@@ -59,18 +62,29 @@ export class ChatBotSession {
 		this.scope = opts.scope;
 		this.history = new HistoryStore(opts.scopeDir);
 		this.memory = new MemoryStore(opts.scopeDir);
+		this.memoryFiles = new MemoryFiles(opts.scopeDir);
+		// 不单独做 memory 工具——记忆文件在沙箱工作目录内（workspace/memories/），
+		// agent 用自带的 read/write/edit/bash 直接操作，沙箱的 per-scope 隔离保证不串。
 		this.tools = [...createDefaultTools(opts.env), ...(opts.extraTools ?? [])];
 	}
 
-	/** 激活：确保工作目录存在，读历史/记忆，构造 Agent。 */
+	/** 激活：确保工作目录存在，读历史/记忆/记忆索引，构造 Agent。 */
 	async activate(): Promise<void> {
 		await mkdir(join(this.opts.scopeDir, "workspace"), { recursive: true });
-		const [previousMessages, memory] = await Promise.all([this.history.load(), this.memory.load()]);
+		await this.memoryFiles.ensure();
+		// 并行加载：完整历史（pi 自带 compaction 会按需压缩）、会话摘要（memory.md）、记忆索引（MEMORY.md）。
+		const [previousMessages, sessionSummary, memoryIndex] = await Promise.all([
+			this.history.load(),
+			this.memory.load(),
+			this.memoryFiles.loadIndex(),
+		]);
 		const systemPrompt = buildSystemPrompt({
 			scopeName: this.opts.scopeName,
 			scopeKind: this.opts.scope.kind,
 			persona: this.opts.persona,
-			memory,
+			memory: sessionSummary,
+			memoryIndex,
+			recentMessageCount: previousMessages.length,
 			tools: this.tools,
 		});
 		this.systemPromptCache = systemPrompt;
@@ -86,7 +100,7 @@ export class ChatBotSession {
 		});
 		// 群聊消息合并：steer 队列设为 "all"，drain 时把积攒的所有消息一次性注入。
 		this.agent.steeringMode = "all";
-		console.log(`[bot] activate scope=${this.opts.scope.kind}:${this.opts.scope.id} tools=[${this.tools.map((t) => t.name).join(",")}]`);
+		console.log(`[bot] activate scope=${this.opts.scope.kind}:${this.opts.scope.id} msgs=${previousMessages.length} tools=[${this.tools.map((t) => t.name).join(",")}]`);
 	}
 
 	/** 当前会话的系统提示词全文（管理端「提示词」视图）。激活后可用。 */

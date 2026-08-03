@@ -1,0 +1,54 @@
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+/**
+ * 智能体自管理的文件式记忆系统。
+ *
+ * 记忆文件放在**沙箱工作目录内**（`<scopeDir>/workspace/memories/`），这样：
+ * - bash/read/write/edit 工具天然能操作（无需单独的 memory 工具）
+ * - 沙箱的 per-scope 工作目录隔离自动保证不同群/私聊的记忆互不串联
+ *
+ * 目录布局（每 scope 的 workspace 下）：
+ *   workspace/memories/
+ *     ├── MEMORY.md            # 索引：一行一条 `- [标题](文件.md) — 钩子`
+ *     ├── user-preferences.md  # 单条记忆：frontmatter + 正文
+ *     └── ...
+ *
+ * 本类只负责两件事：
+ * 1. ensure()：激活时确保 memories/ 目录存在（agent 才能 write 进去）
+ * 2. loadIndex()：读 MEMORY.md 索引，拼入系统提示词，让 agent 知道"有哪些记忆"
+ *
+ * 记忆文件的增删改由 agent 用 read/write/edit/bash 工具直接做（系统提示词里有指引）。
+ */
+const MEMORIES_DIRNAME = "memories";
+const INDEX_FILENAME = "MEMORY.md";
+
+export class MemoryFiles {
+	private readonly dir: string;
+	private readonly indexPath: string;
+
+	constructor(scopeDir: string) {
+		// 关键：在 workspace/ 下（沙箱内），agent 的文件工具能直接操作。
+		this.dir = join(scopeDir, "workspace", MEMORIES_DIRNAME);
+		this.indexPath = join(this.dir, INDEX_FILENAME);
+	}
+
+	/** 确保 memories/ 目录存在（激活时调用，agent 才能 write 进去）。 */
+	async ensure(): Promise<void> {
+		await mkdir(this.dir, { recursive: true });
+	}
+
+	/**
+	 * 读取 MEMORY.md 索引全文。无索引返回 undefined。
+	 * 激活时拼入系统提示词，让 agent 知道有哪些记忆、各自是什么。
+	 */
+	async loadIndex(): Promise<string | undefined> {
+		try {
+			const content = await readFile(this.indexPath, "utf8");
+			const trimmed = content.trim();
+			return trimmed.length > 0 ? trimmed : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+}

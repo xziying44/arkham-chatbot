@@ -23,10 +23,15 @@ export function buildSystemPrompt(options: {
 	scopeName: string;
 	scopeKind: "group" | "user";
 	persona?: string;
+	/** 会话摘要（memory.md，回收时由 generateSummary 生成）。 */
 	memory?: string;
+	/** 记忆索引（MEMORY.md 全文，列出自管理记忆文件的标题+钩子）。 */
+	memoryIndex?: string;
+	/** 激活时加载的历史消息数（让 agent 知道有多少上下文在内存里）。 */
+	recentMessageCount?: number;
 	tools: AgentTool[];
 }): string {
-	const { scopeName, scopeKind, persona, memory } = options;
+	const { scopeName, scopeKind, persona, memory, memoryIndex, recentMessageCount } = options;
 	const isGroup = scopeKind === "group";
 
 	const lines: string[] = [];
@@ -87,11 +92,43 @@ export function buildSystemPrompt(options: {
 	lines.push("- 禁用：代码块（``` 和缩进代码）、表格、三级及以上标题。这些不会被渲染，直接用纯文本或加粗替代。");
 	lines.push("- 展示命令或代码时，用普通文字或加粗，不要用代码块。");
 
+	// ---- 长期记忆区（始终展示，让 agent 知道记忆机制）----
+	// 三层：
+	// 1) 历史上下文：已加载的消息数（agent 知道有多少近期对话在内存里）
+	// 2) 会话摘要（memory.md，回收时自动生成）：上次会话的要点
+	// 3) 记忆索引（workspace/memories/MEMORY.md，agent 自管理）：关键事实清单
+	// 4) 记忆使用指引：怎么用 read/write/edit 操作 memories/ 目录
+	lines.push("");
+	lines.push("## 长期记忆（跨会话保留）");
+	if (recentMessageCount && recentMessageCount > 0) {
+		lines.push(`已加载此前 ${recentMessageCount} 条消息记录作为上下文，你能看到最近的对话。`);
+	} else {
+		lines.push("这是新会话，暂无历史记录。");
+	}
 	if (memory) {
 		lines.push("");
-		lines.push("## 长期记忆（跨会话保留，来自此前的对话）");
+		lines.push("### 上次会话摘要（系统自动生成，请勿手动修改）");
 		lines.push(memory);
 	}
+	lines.push("");
+	lines.push("### 自管理记忆");
+	lines.push("你的工作目录下有 `memories/` 目录，用于跨会话保留关键信息。每条记忆是一个 markdown 文件，`memories/MEMORY.md` 是索引。");
+	lines.push("- **读记忆**：用 read 工具读 `memories/MEMORY.md`（索引）或 `memories/<某文件>.md`（详情）。");
+	lines.push("- **写/更新记忆**：用 write 工具写 `memories/<名称>.md`（含 frontmatter：name/description/type + 正文），并同步更新 `memories/MEMORY.md` 索引（一行：`- [标题](文件.md) — 钩子`）。");
+	lines.push("- **改/删**：用 edit 改、用 bash 删除并更新索引。");
+	if (memoryIndex) {
+		lines.push("");
+		lines.push("#### 当前记忆索引（下次激活时也会加载这份）");
+		lines.push(memoryIndex);
+	} else {
+		lines.push("");
+		lines.push("目前 `memories/` 为空（或无索引）。发现值得长期记住的事时，创建记忆文件并维护索引。");
+	}
+	lines.push("");
+	lines.push("#### 何时该记");
+	lines.push("- **该记**：用户身份/偏好（如「张三喜欢简洁回答」）、进行中的任务/约定（如「在帮李四写脚本，下次要继续」）、用户反馈的做事方式（如「别用代码块回复」）。");
+	lines.push("- **不该记**：一次性问答、能从代码/文件推出的信息、本会话的临时上下文。");
+	lines.push("- 信息变化时更新对应记忆文件、过时时删除并同步索引。索引的钩子要一句话说清「这是什么、何时会用到」——这是下次启动时你第一时间看到的东西。");
 
 	return lines.join("\n");
 }
