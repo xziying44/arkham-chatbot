@@ -1,92 +1,172 @@
-import { type Model, type Models, type Provider, createModels, createProvider } from "@earendil-works/pi-ai";
+import { type Model, type Models, createModels, createProvider } from "@earendil-works/pi-ai";
 import * as builtinProviders from "@earendil-works/pi-ai/providers/all";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
-import { SessionManager, createSendImageTool } from "@arkham/chatbot-core";
-import { createExecutionEnv } from "@arkham/chatbot-sandbox";
-import { QQAdapter } from "@arkham/chatbot-im-qq";
-import type { ImAdapter } from "@arkham/chatbot-im-core";
-import { createMessageRouter } from "./message-router.ts";
+import {
+	createLogger,
+	addSink,
+	createConsoleSink,
+	setLogLevel,
+	type LogEntry,
+} from "@arkham/chatbot-core";
+import {
+	openDb,
+	BotRepository,
+	SettingsRepository,
+	MessageRepository,
+	LogRepository,
+	SettingsKeys,
+	type DatabaseSync,
+} from "@arkham/chatbot-store";
+import { LogBus, startAdminServer, type AdminServer } from "@arkham/chatbot-admin-api";
+import { BotManager, type SandboxConfig } from "./bot-manager.ts";
 import { loadConfig, type AppConfig } from "./config.ts";
+import { bootstrapIfEmpty, loadBotConfigs } from "./bootstrap.ts";
+
+/** DB 驱动的设置快照（启动时读一次，关键运行参数）。 */
+export interface ResolvedSettings {
+	readonly model: string;
+	readonly anthropicBaseUrl?: string;
+	readonly sessionTtlMs: number;
+	readonly reaperIntervalMs: number;
+	readonly sandbox: SandboxConfig;
+}
+
+/** 从 settings 表解析运行参数（env 仅作 fallback）。 */
+export function resolveSettings(config: AppConfig, db: DatabaseSync): ResolvedSettings {
+	const s = new SettingsRepository(db);
+	return {
+		model: s.getOr(SettingsKeys.llmModel, config.model),
+		anthropicBaseUrl: s.get(SettingsKeys.llmAnthropicBaseUrl) ?? config.llm.anthropicBaseUrl,
+		sessionTtlMs: s.getInt(SettingsKeys.sessionTtlMs, config.session.ttlMs),
+		reaperIntervalMs: config.session.reaperIntervalMs, // 不在管理端改，用 env
+		sandbox: {
+			enabled: s.getBool(SettingsKeys.sandboxEnabled, config.sandbox.enabled),
+			networkDisabled: s.getBool(SettingsKeys.sandboxNetworkDisabled, config.sandbox.networkDisabled),
+			timeoutSeconds: s.getInt(SettingsKeys.sandboxTimeoutSeconds, config.sandbox.timeoutSeconds),
+		},
+	};
+}
 
 /**
- * 应用启动入口：把所有部件装配成一个可运行的服务。
+ * 应用启动入口：DB 驱动的多机器人 + 管理端组装。
  *
- *   读配置 → 建 Models（注册内置 provider）→ 解析模型
- *   → 建 SessionManager（注入 envFactory + streamFn）
- *   → 建 QQAdapter → 订阅 router → 连接 → 等待信号
+ *   读 env → 开 DB → 引导默认值 → 解析设置 → 建 Models
+ *   → 建 BotManager（多机器人）→ 启动 AdminServer（管理端 HTTP）
+ *   → 等待信号
+ *
+ * 返回 shutdown 句柄。
  */
-export async function startApp(): Promise<{ shutdown: () => Promise<void> }> {
-	const config = loadConfig();
-	const { models, model } = buildModels(config);
+export interface AppRuntime {
+	readonly db: DatabaseSync;
+	readonly botManager: BotManager;
+	readonly settings: ResolvedSettings;
+	readonly models: Models;
+	readonly admin: AdminServer;
+	readonly shutdown: () => Promise<void>;
+}
 
-	// 先建 adapter，再建 sessions：sessions 的 send_image 工具需要引用 adapter 发图。
-	const adapter: ImAdapter = new QQAdapter({
-		appId: config.qq.appId,
-		appSecret: config.qq.appSecret,
-		apiBase: config.qq.apiBase,
+export async function startApp(): Promise<AppRuntime> {
+	const config = loadConfig();
+
+	// 结构化日志：LogBus（内存广播供 SSE）+ DB sink（落库）+ 控制台 sink（开发）。
+	const logBus = new LogBus(1000);
+	addSink(logBus); // Logger 产生的日志都汇入 bus，再由 SSE 推送
+	addSink(createConsoleSink());
+	setLogLevel("info");
+	const appLog = createLogger("app");
+
+	// 开 DB + 引导。
+	const db = await openDb(config.dbPath);
+	appLog.info("数据库已就绪", { path: config.dbPath });
+
+	// DB 日志 sink：把日志写进 logs 表（在 db 就绪后注册）。
+	const logRepo = new LogRepository(db);
+	addSink({
+		write(entry: LogEntry) {
+			try {
+				logRepo.insert({
+					ts: entry.ts,
+					level: entry.level,
+					source: entry.source ?? null,
+					botId: entry.botId ?? null,
+					scope: entry.scope ?? null,
+					message: entry.message,
+					fields: entry.fields ? JSON.stringify(entry.fields) : null,
+				});
+			} catch {
+				/* DB 写失败不影响日志产生 */
+			}
+		},
 	});
 
-	const sessions = new SessionManager({
-		dataDir: config.dataDir,
+	bootstrapIfEmpty(db, config);
+
+	// 解析运行设置。
+	const settings = resolveSettings(config, db);
+	const { models, model } = buildModels(settings);
+	const messages = new MessageRepository(db);
+
+	// 多机器人编排器。
+	const botManager = new BotManager({
+		dataRoot: config.dataDir,
 		model,
 		models,
 		streamFn: models.streamSimple.bind(models),
-		envFactory: (_scope, workspaceDir) =>
-			createExecutionEnv({
-				enabled: config.sandbox.enabled,
-				cwd: workspaceDir,
-				networkDisabled: config.sandbox.networkDisabled,
-				timeoutSeconds: config.sandbox.timeoutSeconds,
-			}),
-		ttlMs: config.session.ttlMs,
-		reaperIntervalMs: config.session.reaperIntervalMs,
-		persona: config.persona,
-		// 给每个 scope 注入 send_image 工具：通过当前 adapter 把本地图片发到该 scope。
-		extraToolsFactory: (scope, getReplyToMsgId, workspaceDir) => [
-			createSendImageTool({
-				scopeId: scope.id,
-				getReplyToMsgId,
-				workspaceDir,
-				send: async (scopeId, filePath, replyToMsgId) => {
-					const scopeKey = { kind: scope.kind, id: scopeId };
-					await adapter.sendImage(scopeKey, filePath, replyToMsgId);
-				},
-			}),
-		],
+		sandbox: settings.sandbox,
+		sessionTtlMs: settings.sessionTtlMs,
+		reaperIntervalMs: settings.reaperIntervalMs,
+		messages,
+		logger: appLog,
 	});
-	sessions.start();
 
-	const router = createMessageRouter({ adapter, sessions });
-	adapter.subscribe(router);
+	const botConfigs = loadBotConfigs(db);
+	await botManager.start(botConfigs);
+	appLog.info("机器人已启动", {
+		total: botConfigs.length,
+		enabled: botConfigs.filter((b) => b.enabled).length,
+		model: settings.model,
+	});
 
-	await adapter.connect();
-	console.info(`[app] connected; model=${model.provider}/${model.id}; data=${config.dataDir}`);
+	// 管理端 HTTP（Hono）。
+	const admin = await startAdminServer({
+		db,
+		botManager,
+		logBus,
+		host: config.admin.host,
+		port: config.admin.port,
+		webDistDir: config.admin.webDistDir,
+	});
 
 	const shutdown = async () => {
-		console.info("[app] shutting down...");
-		await adapter.disconnect().catch(() => {});
-		await sessions.shutdown().catch(() => {});
+		appLog.info("关闭中...");
+		await admin.close().catch(() => {});
+		await botManager.shutdown().catch(() => {});
+		// WAL 模式下直接关闭即可。
+		try {
+			db.close();
+		} catch {
+			/* ignore */
+		}
 	};
-	return { shutdown };
+
+	return { db, botManager, settings, models, admin, shutdown };
 }
 
 /**
  * 创建 Models 实例并注册 provider：
  * - 注册全部内置 provider（Anthropic 官方/OpenAI/DeepSeek/...）。
- * - 当配置了自定义 Anthropic 兼容端点（ANTHROPIC_BASE_URL，如智谱）时，
- *   用该端点重建 anthropic provider，并把 CHATBOT_MODEL 指定的模型注册进去。
- * 返回解析好的 Model 对象。
+ * - 当配置了自定义 Anthropic 兼容端点（如 DeepSeek/智谱）时，用该端点重建 anthropic provider，
+ *   并把 model 指定的模型注册进去。
  */
-export function buildModels(config: AppConfig): { models: Models; model: Model<any> } {
+export function buildModels(settings: ResolvedSettings): { models: Models; model: Model<any> } {
 	const models = createModels();
 	for (const provider of builtinProviders.builtinProviders()) {
 		(models as ReturnType<typeof createModels>).setProvider(provider);
 	}
 
-	// 自定义 Anthropic 兼容端点：重建 anthropic provider，注册指定模型。
-	if (config.llm.anthropicBaseUrl) {
-		const { provider: providerId, modelId } = parseModelSpec(config.model);
+	if (settings.anthropicBaseUrl) {
+		const { provider: providerId, modelId } = parseModelSpec(settings.model);
 		if (providerId === "anthropic") {
 			const base = anthropicProvider();
 			const customModel: Model<"anthropic-messages"> = {
@@ -94,17 +174,17 @@ export function buildModels(config: AppConfig): { models: Models; model: Model<a
 				name: modelId,
 				api: "anthropic-messages",
 				provider: "anthropic",
-				baseUrl: config.llm.anthropicBaseUrl,
+				baseUrl: settings.anthropicBaseUrl,
 				reasoning: false,
 				input: ["text", "image"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 128_000,
-				maxTokens: 4096,
+				contextWindow: 1_000_000,
+				maxTokens: 8192,
 			};
-			const customProvider: Provider<"anthropic-messages"> = createProvider({
+			const customProvider = createProvider({
 				id: "anthropic",
 				name: "Anthropic (custom endpoint)",
-				baseUrl: config.llm.anthropicBaseUrl,
+				baseUrl: settings.anthropicBaseUrl,
 				auth: base.auth,
 				models: [customModel],
 				api: anthropicMessagesApi(),
@@ -113,15 +193,15 @@ export function buildModels(config: AppConfig): { models: Models; model: Model<a
 		}
 	}
 
-	const model = resolveModel(models, config.model);
+	const model = resolveModel(models, settings.model);
 	return { models, model };
 }
 
 /** 解析 `provider/model` 形式的模型字符串为 { provider, modelId }。 */
-function parseModelSpec(spec: string): { provider: string; modelId: string } {
+export function parseModelSpec(spec: string): { provider: string; modelId: string } {
 	const slash = spec.indexOf("/");
 	if (slash <= 0) {
-		throw new Error(`Invalid CHATBOT_MODEL "${spec}", expected "<provider>/<model-id>"`);
+		throw new Error(`Invalid model spec "${spec}", expected "<provider>/<model-id>"`);
 	}
 	return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) };
 }
@@ -136,3 +216,6 @@ function resolveModel(models: Models, spec: string): Model<any> {
 	}
 	return model;
 }
+
+// 重新导出供 admin-api 使用。
+export { BotRepository, SettingsRepository };

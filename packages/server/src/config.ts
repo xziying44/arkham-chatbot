@@ -1,23 +1,47 @@
 import { resolve } from "node:path";
 
-/** 从环境变量解析出的应用配置。 */
+/**
+ * 从环境变量解析出的应用配置。
+ *
+ * 多机器人上线后，QQ 凭证、模型、persona 等转入 SQLite（bots / settings 表），
+ * 可在管理端动态增改。这里的 env 仅作 **首次启动的引导默认值**：
+ * 首次起库时若 DB 为空，用 env 的 QQ 凭证种一条默认机器人，用 env 的 LLM 配置写默认设置。
+ * 之后以 DB 为准。其它（端口/数据目录等基础设施）仍始终读 env。
+ */
 export interface AppConfig {
+	/** 引导用的默认 QQ 凭证（仅首次种库用；后续以 DB 为准）。 */
 	readonly qq: { appId: string; appSecret: string; apiBase: string };
+	/** 引导用的默认模型规格 "<provider>/<model-id>"。 */
 	readonly model: string;
 	readonly llm: {
-		/** 自定义 Anthropic 兼容端点（如智谱 open.bigmodel.cn）。未设则用官方 api.anthropic.com。 */
+		/** 自定义 Anthropic 兼容端点（如智谱/DeepSeek）。未设则用官方 api.anthropic.com。 */
 		readonly anthropicBaseUrl?: string;
 	};
 	readonly session: { ttlMs: number; reaperIntervalMs: number };
 	readonly sandbox: { enabled: boolean; networkDisabled: boolean; timeoutSeconds: number };
+	/** 运行时数据根目录（机器人工作区、session.jsonl、memory.md）。 */
 	readonly dataDir: string;
+	/** 引导用的默认 persona（仅首次种库用）。 */
 	readonly persona?: string;
+	/** SQLite 数据库文件路径（机器人账号/设置/消息/日志）。 */
+	readonly dbPath: string;
+	/** 管理端 HTTP 服务监听地址。 */
+	readonly admin: {
+		readonly host: string;
+		readonly port: number;
+		/** admin-web 构建产物目录（SPA 静态文件）。 */
+		readonly webDistDir?: string;
+	};
+	/** 引导管理员账号（仅首次种库用）。 */
+	readonly bootstrapAdmin: {
+		readonly username: string;
+		readonly password?: string;
+	};
 }
 
-function required(name: string): string {
+function optional(name: string): string | undefined {
 	const v = process.env[name];
-	if (!v) throw new Error(`Missing required env: ${name}`);
-	return v;
+	return v && v.trim() !== "" ? v : undefined;
 }
 
 function int(name: string, fallback: number): number {
@@ -36,13 +60,14 @@ function bool(name: string, fallback: boolean): boolean {
 
 /** 从 process.env 读取并校验配置。 */
 export function loadConfig(): AppConfig {
+	const dataDir = resolve(process.env.CHATBOT_DATA_DIR ?? "./data");
 	return {
 		qq: {
-			appId: required("QQ_APP_ID"),
-			appSecret: required("QQ_APP_SECRET"),
+			appId: optional("QQ_APP_ID") ?? "",
+			appSecret: optional("QQ_APP_SECRET") ?? "",
 			apiBase: process.env.QQ_API_BASE ?? "https://api.sgroup.qq.com",
 		},
-		model: required("CHATBOT_MODEL"),
+		model: optional("CHATBOT_MODEL") ?? "anthropic/deepseek-v4-flash",
 		llm: {
 			anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
 		},
@@ -55,7 +80,18 @@ export function loadConfig(): AppConfig {
 			networkDisabled: bool("CHATBOT_SANDBOX_NETWORK_DISABLED", true),
 			timeoutSeconds: int("CHATBOT_SANDBOX_TIMEOUT_SECONDS", 30),
 		},
-		dataDir: resolve(process.env.CHATBOT_DATA_DIR ?? "./data"),
+		dataDir,
 		persona: process.env.CHATBOT_PERSONA,
+		dbPath: resolve(process.env.CHATBOT_DB_PATH ?? `${dataDir}/chatbot.db`),
+		admin: {
+			host: process.env.ADMIN_HOST ?? "127.0.0.1",
+			port: int("ADMIN_PORT", 5180),
+			webDistDir: optional("ADMIN_WEB_DIST"),
+		},
+		bootstrapAdmin: {
+			username: process.env.ADMIN_USERNAME ?? "admin",
+			password: optional("ADMIN_PASSWORD"),
+		},
 	};
 }
+

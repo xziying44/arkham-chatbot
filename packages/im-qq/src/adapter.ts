@@ -19,12 +19,17 @@ export interface QQAdapterOptions {
 	readonly intents?: number;
 }
 
+/** 连接状态机阶段（管理端展示用）。 */
+export type QQConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting" | "fatal";
+
 export class QQAdapter implements ImAdapter {
 	private readonly client: QQClient;
 	private readonly receiver: QQWebSocketReceiver;
 	private readonly handlers = new Set<(event: ImEvent) => void | Promise<void>>();
 	private connected = false;
 	private receiverReady = false;
+	/** 最近一次 receiver 上报的阶段（连接中/重连中/致命）。 */
+	private phase: QQConnectionState = "disconnected";
 
 	constructor(opts: QQAdapterOptions) {
 		this.client = new QQClient({
@@ -37,10 +42,31 @@ export class QQAdapter implements ImAdapter {
 			intents: opts.intents,
 		});
 		this.receiver.on("message", (msg: QqIncomingMessage) => this.onIncoming(msg));
+		// 把 receiver 的生命周期事件映射到 phase，供管理端展示。
+		this.receiver.on("reconnecting", () => {
+			this.phase = "reconnecting";
+		});
+		this.receiver.on("fatal", () => {
+			this.phase = "fatal";
+		});
 	}
 
 	get isConnected(): boolean {
 		return this.connected && this.receiverReady;
+	}
+
+	/** AppID（管理端展示用）。 */
+	get appId(): string {
+		return this.client.appId;
+	}
+
+	/** 当前连接阶段（比 isConnected 更细粒度）。 */
+	get connectionState(): QQConnectionState {
+		if (this.phase === "fatal") return "fatal";
+		if (this.isConnected) return "connected";
+		if (this.phase === "reconnecting") return "reconnecting";
+		if (this.connected) return "connecting"; // connect() 已调用但 READY 未到
+		return "disconnected";
 	}
 
 	async connect(): Promise<void> {
@@ -48,15 +74,18 @@ export class QQAdapter implements ImAdapter {
 		const ready = new Promise<void>((resolve, reject) => {
 			const onReady = () => {
 				this.receiverReady = true;
+				this.phase = "connected";
 				resolve();
 			};
 			const onFatal = (info: { reason: string }) => {
+				this.phase = "fatal";
 				this.receiver.off("ready", onReady);
 				reject(new Error(`QQ adapter fatal: ${info.reason}`));
 			};
 			this.receiver.once("ready", onReady);
 			this.receiver.once("fatal", onFatal);
 		});
+		this.phase = "connecting";
 		await this.receiver.start();
 		this.connected = true;
 		await ready;
@@ -93,6 +122,7 @@ export class QQAdapter implements ImAdapter {
 	async disconnect(): Promise<void> {
 		this.connected = false;
 		this.receiverReady = false;
+		this.phase = "disconnected";
 		await this.receiver.stop();
 	}
 

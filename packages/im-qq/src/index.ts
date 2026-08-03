@@ -1,5 +1,5 @@
 export { QQAdapter } from "./adapter.ts";
-export type { QQAdapterOptions } from "./adapter.ts";
+export type { QQAdapterOptions, QQConnectionState } from "./adapter.ts";
 export { QQClient, groupTarget, userTarget, type SendOutcome, type ScopeTarget } from "./client.ts";
 export type { QQClientOptions } from "./client.ts";
 export { QQWebSocketReceiver } from "./websocket.ts";

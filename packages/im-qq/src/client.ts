@@ -69,6 +69,21 @@ export class QQClient {
 		};
 	}
 
+	/** AppID（管理端展示用）。 */
+	get appId(): string {
+		return this.opts.appId;
+	}
+
+	/** access_token 过期时间（秒级 Unix 时间戳），未获取过为 0。 */
+	get tokenExpiresAt(): number {
+		return this.expiresAt;
+	}
+
+	/** 当前累计发送序号（msg_seq 计数器）。 */
+	get sentCount(): number {
+		return this.msgSeq;
+	}
+
 	/** 取一个未过期的 access_token，必要时刷新。并发刷新只发一次。 */
 	async getAccessToken(): Promise<string> {
 		const now = Math.floor(Date.now() / 1000);

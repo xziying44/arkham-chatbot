@@ -219,4 +219,79 @@ export class SessionManager {
 	get activeCount(): number {
 		return this.active.size;
 	}
+
+	/**
+	 * 列出当前活跃 scope 的运行时信息（管理端「会话」视图用）。
+	 * 不返回 ChatBotSession 引用，避免上层直接操作内部 Agent。
+	 */
+	listActiveScopes(): ActiveScopeInfo[] {
+		const now = Date.now();
+		const out: ActiveScopeInfo[] = [];
+		for (const [key, entry] of this.active) {
+			out.push({
+				key,
+				scope: entry.session.scope,
+				lastActivityAt: entry.lastActivityAt,
+				ttlRemainingMs: Math.max(0, this.opts.ttlMs - (now - entry.lastActivityAt)),
+				messageCount: entry.session.messages.length,
+			});
+		}
+		return out.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+	}
+
+	/**
+	 * 取某 scope 的详情：系统提示词 + 工具描述符 + 最近 N 条消息。
+	 * 不存在活跃会话时返回 undefined。
+	 */
+	getScopeDetail(scope: ScopeKey, recentMessageLimit = 20): ActiveScopeDetail | undefined {
+		const entry = this.active.get(scopeKeyStr(scope));
+		if (!entry) return undefined;
+		const messages = entry.session.messages;
+		return {
+			scope: entry.session.scope,
+			systemPrompt: entry.session.systemPrompt,
+			tools: entry.session.toolDescriptors,
+			messages: messages.slice(Math.max(0, messages.length - recentMessageLimit)),
+			messageCount: messages.length,
+			lastActivityAt: entry.lastActivityAt,
+		};
+	}
+
+	/**
+	 * 强制回收一个 scope（管理端「强制回收」按钮）。
+	 * 与 TTL 超时走同一条回收路径：提取记忆、落盘、销毁 Agent。
+	 * 不存在活跃会话时返回 false。
+	 */
+	async forceReap(scope: ScopeKey): Promise<boolean> {
+		const entry = this.active.get(scopeKeyStr(scope));
+		if (!entry) return false;
+		await this.reapEntry(entry).catch(() => {});
+		return true;
+	}
+
+	/** 回收所有活跃会话（改 LLM 端点后强制应用新模型用）。 */
+	async reapAll(): Promise<number> {
+		const entries = Array.from(this.active.values());
+		await Promise.all(entries.map((e) => this.reapEntry(e).catch(() => {})));
+		return entries.length;
+	}
+}
+
+/** 活跃 scope 的运行时摘要（listActiveScopes 返回）。 */
+export interface ActiveScopeInfo {
+	readonly key: string;
+	readonly scope: ScopeKey;
+	readonly lastActivityAt: number;
+	readonly ttlRemainingMs: number;
+	readonly messageCount: number;
+}
+
+/** 活跃 scope 的详情（getScopeDetail 返回）。 */
+export interface ActiveScopeDetail {
+	readonly scope: ScopeKey;
+	readonly systemPrompt: string;
+	readonly tools: { name: string; description: string }[];
+	readonly messages: AgentMessage[];
+	readonly messageCount: number;
+	readonly lastActivityAt: number;
 }

@@ -8,6 +8,8 @@ export { createDefaultTools, wrapHarnessTool, wrapHarnessTools } from "./tools/i
 export { createSendImageTool } from "./tools/send-image.ts";
 export type { CreateSendImageToolOptions, ImageSender, SendImageInput } from "./tools/send-image.ts";
 export { SessionManager } from "./session/session-manager.ts";
-export type { SessionManagerOptions } from "./session/session-manager.ts";
+export type { SessionManagerOptions, ActiveScopeInfo, ActiveScopeDetail } from "./session/session-manager.ts";
 export { HistoryStore } from "./session/history.ts";
 export { MemoryStore } from "./session/memory.ts";
+export { createLogger, addSink, setLogLevel, createConsoleSink } from "./logging.ts";
+export type { Logger, LogEntry, LogSink, LogLevel } from "./logging.ts";

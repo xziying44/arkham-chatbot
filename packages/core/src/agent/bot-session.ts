@@ -42,6 +42,8 @@ export class ChatBotSession {
 	private readonly memory: MemoryStore;
 	private agent!: Agent;
 	private readonly tools: AgentTool[];
+	/** 激活时构建并缓存，供管理端只读查看。 */
+	private systemPromptCache: string | undefined;
 
 	constructor(opts: BotSessionOptions) {
 		this.opts = opts;
@@ -61,6 +63,7 @@ export class ChatBotSession {
 			memory,
 			tools: this.tools,
 		});
+		this.systemPromptCache = systemPrompt;
 
 		this.agent = new Agent({
 			initialState: {
@@ -72,6 +75,16 @@ export class ChatBotSession {
 			streamFn: this.opts.streamFn,
 		});
 		console.log(`[bot] activate scope=${this.opts.scope.kind}:${this.opts.scope.id} tools=[${this.tools.map((t) => t.name).join(",")}]`);
+	}
+
+	/** 当前会话的系统提示词全文（管理端「提示词」视图）。激活后可用。 */
+	get systemPrompt(): string {
+		return this.systemPromptCache ?? "";
+	}
+
+	/** 工具描述符列表（name + description），管理端只读展示。 */
+	get toolDescriptors(): { name: string; description: string }[] {
+		return this.tools.map((t) => ({ name: t.name, description: t.description }));
 	}
 
 	/**

@@ -20,6 +20,8 @@
     "@arkham/chatbot-im-core": "workspace:*",
     "@arkham/chatbot-im-qq": "workspace:*",
     "@arkham/chatbot-sandbox": "workspace:*",
+    "@arkham/chatbot-store": "workspace:*",
+    "@arkham/chatbot-admin-api": "workspace:*",
     "@earendil-works/pi-agent-core": "^0.83.0",
     "@earendil-works/pi-ai": "^0.83.0"
   },
