@@ -1,0 +1,16 @@
+/* 全局重置：消除浏览器默认 body margin（AntD5 的 cssinjs 不做全局 reset）。 */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+#root {
+  height: 100%;
+}
+
+/* 让 AntD Layout 撑满整个视口，不留默认间隙。 */
+.ant-layout {
+  min-height: 100vh;
+}
