@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Runtime data (每群工作目录、会话记录、记忆)
+data/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*

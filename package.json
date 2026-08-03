@@ -1,0 +1,18 @@
+{
+  "name": "arkham-chatbot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "群聊机器人 — 基于 pi-agent-core 的隔离式群聊智能体",
+  "packageManager": "pnpm@9.14.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "dev": "pnpm --filter @arkham/chatbot-server dev",
+    "start": "pnpm --filter @arkham/chatbot-server start"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@arkham/chatbot-sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "node --test --import tsx test/*.test.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.83.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.0"
+  }
+}

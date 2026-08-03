@@ -1,0 +1,29 @@
+{
+  "name": "@arkham/chatbot-im-qq",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "echo \"no tests yet\""
+  },
+  "dependencies": {
+    "@arkham/chatbot-core": "workspace:*",
+    "@arkham/chatbot-im-core": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.9.0"
+  }
+}

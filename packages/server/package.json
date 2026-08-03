@@ -1,0 +1,31 @@
+{
+  "name": "@arkham/chatbot-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "arkham-bot": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "start": "node --env-file=.env dist/bin.js",
+    "dev": "node --env-file=.env --import tsx src/bin.ts",
+    "smoke": "node --import tsx scripts/smoke.ts",
+    "test": "echo \"no tests yet\""
+  },
+  "dependencies": {
+    "@arkham/chatbot-core": "workspace:*",
+    "@arkham/chatbot-im-core": "workspace:*",
+    "@arkham/chatbot-im-qq": "workspace:*",
+    "@arkham/chatbot-sandbox": "workspace:*",
+    "@earendil-works/pi-agent-core": "^0.83.0",
+    "@earendil-works/pi-ai": "^0.83.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.0"
+  }
+}
