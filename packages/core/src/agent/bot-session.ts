@@ -53,8 +53,6 @@ export class ChatBotSession {
 	 * 由 prompt() 写入、run 结束后读取。
 	 */
 	private triggerMessageId: string | undefined;
-	/** 触发当前 run 的群消息发送者 openid（回复时 @ 那个人）。 */
-	private triggerSenderOpenid: string | undefined;
 	private runInFlight: Promise<string> | undefined;
 
 	constructor(opts: BotSessionOptions) {
@@ -131,40 +129,36 @@ export class ChatBotSession {
 	 * - 若 agent 忙 → agent.steer 注入（mode=all），等当前 run 结束后批量 drain。
 	 *   steer 的消息不改变 triggerMessageId（回复仍引用触发当前 run 的那条消息）。
 	 *
-	 * 群消息文本会带发送者前缀（`<昵称>: <正文>`），让 agent 识别是谁在说话。
+	 * 群消息文本会带发送者前缀（`[openid]: 正文`），让 agent 识别是谁在说话。
+	 * agent 自行决定回复里是否写 <qqbot-at-user> 标签 @ 人（adapter 不再自动 @）。
 	 * 私聊不带头缀（只有一个对话者）。
 	 *
-	 * @returns 回复文本 + 该回复应引用的消息 id + 触发消息发送者的 openid（群消息 @ 人用）。
+	 * @returns 回复文本 + 该回复应引用的消息 id。
 	 */
 	async prompt(message: {
 		text: string;
 		senderId: string;
 		senderName: string;
 		platformMessageId?: string;
-	}): Promise<{ text: string; replyToMessageId?: string; mentionUserOpenid?: string }> {
-		// QQ 群消息事件不提供昵称，senderName 退化为 senderId（member_openid）。
-		// 因此群消息前缀直接用 openid 作为发送者标识，agent 靠 openid 识别不同群员，
-		// 并通过记忆建立「openid → 称呼」映射（首次互动时问对方怎么称呼）。
+	}): Promise<{ text: string; replyToMessageId?: string }> {
 		const isGroup = this.scope.kind === "group";
 		const formatted = isGroup
 			? `[${message.senderId}]: ${message.text}`
 			: message.text;
 
-		// 忙 → steer 注入，等当前 run 的回复（回复引用触发消息、@ 触发送者）。
+		// 忙 → steer 注入，等当前 run 的回复（回复引用触发消息）。
 		if (this.runInFlight) {
 			this.agent.steer({ role: "user", content: formatted, timestamp: Date.now() });
-			return this.runInFlight.then((text) => ({ text, replyToMessageId: this.triggerMessageId, mentionUserOpenid: this.triggerSenderOpenid }));
+			return this.runInFlight.then((text) => ({ text, replyToMessageId: this.triggerMessageId }));
 		}
 
 		// 空闲 → 开新 run。
 		this.triggerMessageId = message.platformMessageId;
-		// 群消息记录发送者 openid，回复时用它 @ 那个人。
-		this.triggerSenderOpenid = isGroup ? message.senderId : undefined;
 		if (this.opts.replyToHolder) this.opts.replyToHolder.current = message.platformMessageId;
 		this.runInFlight = this.runPrompt(formatted);
 		try {
 			const text = await this.runInFlight;
-			return { text, replyToMessageId: this.triggerMessageId, mentionUserOpenid: this.triggerSenderOpenid };
+			return { text, replyToMessageId: this.triggerMessageId };
 		} finally {
 			this.runInFlight = undefined;
 			if (this.opts.replyToHolder) this.opts.replyToHolder.current = undefined;

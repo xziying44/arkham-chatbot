@@ -24,6 +24,4 @@ export interface OutgoingMessage {
 	readonly text: string;
 	/** 回复时引用的入站消息平台 ID（被动回复）。 */
 	readonly replyToMessageId?: string;
-	/** 群消息回复时要 @ 的用户 openid（触发本轮 run 的发送者）。 */
-	readonly mentionUserOpenid?: string;
 }

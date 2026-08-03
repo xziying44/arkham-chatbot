@@ -58,12 +58,11 @@ export function createMessageRouter(opts: MessageRouterOptions) {
 				if (reply.text) {
 					// 用 dispatch 返回的 replyToMessageId（触发 run 的那条群消息），
 					// 而非当前 event 的 messageId——群消息合并时可能不同。
-					// mentionUserOpenid 让群消息回复 @ 触发送者。
+					// @ 人由 agent 自行决定（在文本里写 <qqbot-at-user> 标签），adapter 不自动 @。
 					await adapter.sendText(
 						event.scope,
 						reply.text,
 						reply.replyToMessageId ?? event.platformMessageId,
-						reply.mentionUserOpenid,
 					);
 				// 出站落库。
 				try {

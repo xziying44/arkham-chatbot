@@ -17,11 +17,10 @@ export interface ImAdapter extends AsyncDisposable {
 	/**
 	 * 向某 scope 发送文本消息。
 	 * @param replyToMessageId 被引用消息 id（被动回复/引用）
-	 * @param mentionUserOpenid 群消息里要 @ 的用户 openid（通常是被回复消息的发送者）
 	 */
-	sendText(scope: ScopeKey, text: string, replyToMessageId?: string, mentionUserOpenid?: string): Promise<void>;
+	sendText(scope: ScopeKey, text: string, replyToMessageId?: string): Promise<void>;
 	/** 向某 scope 发送本地图片（filePath 为宿主机本地路径）。 */
-	sendImage(scope: ScopeKey, filePath: string, replyToMessageId?: string, mentionUserOpenid?: string): Promise<void>;
+	sendImage(scope: ScopeKey, filePath: string, replyToMessageId?: string): Promise<void>;
 	/** 主动断开。AsyncDisposable 也走此路径。 */
 	disconnect(): Promise<void>;
 	/** 连接是否处于活跃状态。 */

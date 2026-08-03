@@ -109,7 +109,6 @@ export class SessionManager {
 		return {
 			text: result.text || "（处理完成，但没有文字回复。）",
 			replyToMessageId: result.replyToMessageId,
-			mentionUserOpenid: result.mentionUserOpenid,
 		};
 	}
 
