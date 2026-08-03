@@ -1,13 +1,17 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 /**
- * 构建群聊机器人的系统提示词。风格参考 pi-coding-agent：简短、工具导向、
- * 给 LLM 一个明确的「群成员助手」身份，并列出可用工具与准则。
+ * 构建群聊机器人的系统提示词。
+ *
+ * 只写身份、人设、使用准则、回复格式、长期记忆。**不在这里罗列工具名+描述**：
+ * pi-agent-core 走原生 function-calling，工具的 description 通过 tools API
+ * （Context.tools → provider 的 tools[]）单独发给 LLM，这里再拼一份会重复。
+ * 这里只保留 description 不覆盖的策略性指引（沙箱约束、会话边界、何时发图等）。
  *
  * @param scopeName 作用域展示名（如群名）。
  * @param persona 机器人人设描述（可选，见 memory）。
  * @param memory 回收时提取并持久化的长期记忆（可选）。
- * @param tools 当前激活的工具集（取其 description 作为说明）。
+ * @param tools 当前激活的工具集（保留参数，当前未用于拼接；预留给未来按工具条件生成准则）。
  */
 export function buildSystemPrompt(options: {
 	scopeName: string;
@@ -15,7 +19,7 @@ export function buildSystemPrompt(options: {
 	memory?: string;
 	tools: AgentTool[];
 }): string {
-	const { scopeName, persona, memory, tools } = options;
+	const { scopeName, persona, memory } = options;
 
 	const lines: string[] = [];
 	lines.push(`你是「${scopeName}」的群聊机器人助手。你在群里帮助成员：回答问题、执行命令、读写文件、处理信息。`);
@@ -28,13 +32,11 @@ export function buildSystemPrompt(options: {
 		lines.push(persona);
 	}
 
-	if (tools.length > 0) {
-		lines.push("");
-		lines.push("## 可用工具");
-		for (const tool of tools) {
-			lines.push(`- ${tool.name}: ${tool.description}`);
-		}
-	}
+	// 注意：不要在这里罗列工具名 + description。
+	// pi-agent-core 走原生 function-calling，工具的 description 会通过 tools API
+	// 单独发给 LLM（见 agent-loop.js 的 Context.tools）。这里再拼一份会重复，
+	// 既白占 token 又可能让模型困惑。这里只写「使用策略」——何时用哪个工具、
+	// 沙箱约束、会话边界等 description 不一定覆盖的指引。
 
 	lines.push("");
 	lines.push("## 准则");

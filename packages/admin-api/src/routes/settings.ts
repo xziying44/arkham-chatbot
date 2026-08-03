@@ -34,8 +34,7 @@ const PROMPT_TEMPLATE = `你是「<群/用户 id>」的群聊机器人助手。�
 ## 你的设定
 <机器人 persona（在机器人编辑里改）>
 
-## 可用工具
-<运行时由 bash/read/edit/write/send_image 的 name + description 列出>
+（工具的 name/description 由 pi-agent-core 通过 function-calling tools API 单独发给 LLM，不在此拼接）
 
 ## 准则
 - 用 bash/read/write 等工具干活，不要凭空编造文件内容或命令结果。
