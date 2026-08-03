@@ -70,7 +70,6 @@ export class QQAdapter implements ImAdapter {
 	async sendText(scope: { kind: "group" | "user"; id: string }, text: string, replyToMessageId?: string): Promise<void> {
 		const target = this.toTarget(scope);
 		// 优先发 Markdown（msg_type=2），失败则降级为纯文本（msg_type=0）。
-		// QQ 群 markdown 可能命中审核或被拒，纯文本兜底保证消息可达。
 		try {
 			await this.client.sendMarkdown(target, text, replyToMessageId);
 		} catch (mdError) {
@@ -102,6 +101,7 @@ export class QQAdapter implements ImAdapter {
 	}
 
 	private async onIncoming(msg: QqIncomingMessage): Promise<void> {
+		console.log(`[qq-adapter] 收到 ${msg.kind} 消息 id=${msg.messageId} text=${msg.text.slice(0, 30)}`);
 		const event: ImEvent = {
 			type: "message",
 			scope: msg.kind === "group" ? groupScope(msg.scopeId) : userScope(msg.scopeId),

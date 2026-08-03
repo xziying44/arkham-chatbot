@@ -30,8 +30,14 @@ export interface SessionManagerOptions {
 	/**
 	 * 按 scope 生成额外工具（如 send_image）。每个 scope 激活时调用一次，
 	 * 返回的工具会与默认 bash/read/edit/write 一起装入 Agent。
+	 * getReplyToMsgId 返回当前被动消息 id（工具执行期间有值），供需要被动回复引用的工具使用。
+	 * workspaceDir 为该 scope 的沙箱工作目录绝对路径，供需要做路径边界检查的工具使用。
 	 */
-	readonly extraToolsFactory?: (scope: ScopeKey) => AgentTool[];
+	readonly extraToolsFactory?: (
+		scope: ScopeKey,
+		getReplyToMsgId: () => string | undefined,
+		workspaceDir: string,
+	) => AgentTool[];
 }
 
 interface ActiveEntry {
@@ -68,6 +74,7 @@ export class SessionManager {
 			ttlMs,
 			reaperIntervalMs: opts.reaperIntervalMs ?? 60_000,
 			persona: opts.persona,
+			extraToolsFactory: opts.extraToolsFactory,
 		};
 	}
 
@@ -121,7 +128,10 @@ export class SessionManager {
 		const scopeDir = `${this.opts.dataDir}/${scope.kind}/${scope.id}`;
 		const workspaceDir = `${scopeDir}/workspace`;
 		const env = this.opts.envFactory(scope, workspaceDir);
-		const extraTools = this.opts.extraToolsFactory?.(scope) ?? [];
+		// 共享 holder：factory 创建的工具读它，ChatBotSession.prompt 写它。
+		// 让 send_image 等工具能拿到当前被动消息 id（群消息发图必须带 msg_id）。
+		const replyToHolder: { current?: string } = {};
+		const extraTools = this.opts.extraToolsFactory?.(scope, () => replyToHolder.current, workspaceDir) ?? [];
 		const session = new ChatBotSession({
 			scope,
 			scopeName: scope.id,
@@ -131,6 +141,7 @@ export class SessionManager {
 			env,
 			persona: this.opts.persona,
 			extraTools,
+			replyToHolder,
 		});
 		await session.activate();
 
@@ -147,7 +158,7 @@ export class SessionManager {
 
 	/** 执行单轮：prompt → 拼回复。 */
 	private async runTurn(entry: ActiveEntry, message: IncomingMessage): Promise<OutgoingMessage> {
-		const text = await entry.session.prompt(message.text);
+		const text = await entry.session.prompt(message.text, message.platformMessageId);
 		return { text: text || "（处理完成，但没有文字回复。）", replyToMessageId: message.platformMessageId };
 	}
 

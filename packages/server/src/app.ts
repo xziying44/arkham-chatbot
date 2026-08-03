@@ -43,12 +43,14 @@ export async function startApp(): Promise<{ shutdown: () => Promise<void> }> {
 		reaperIntervalMs: config.session.reaperIntervalMs,
 		persona: config.persona,
 		// 给每个 scope 注入 send_image 工具：通过当前 adapter 把本地图片发到该 scope。
-		extraToolsFactory: (scope) => [
+		extraToolsFactory: (scope, getReplyToMsgId, workspaceDir) => [
 			createSendImageTool({
 				scopeId: scope.id,
-				send: async (scopeId, filePath) => {
+				getReplyToMsgId,
+				workspaceDir,
+				send: async (scopeId, filePath, replyToMsgId) => {
 					const scopeKey = { kind: scope.kind, id: scopeId };
-					await adapter.sendImage(scopeKey, filePath);
+					await adapter.sendImage(scopeKey, filePath, replyToMsgId);
 				},
 			}),
 		],

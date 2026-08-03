@@ -58,6 +58,8 @@ export class QQWebSocketReceiver extends EventEmitter {
 	private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
 	private heartbeatInterval = DEFAULT_HEARTBEAT_INTERVAL_MS;
 	private lastSeq: number | null = null;
+	/** 已处理的 DISPATCH 事件 id 去重窗口（防止重连/抖动重放）。 */
+	private readonly seenEventIds = new Set<string>();
 	private retries = 0;
 	private running = false;
 	private manualClose = false;
@@ -123,6 +125,9 @@ export class QQWebSocketReceiver extends EventEmitter {
 			}
 			case OpCode.DISPATCH: {
 				if (typeof payload.s === "number") this.lastSeq = payload.s;
+				// 去重：QQ 在重连/网络抖动时会重放已推送事件（相同 seq 或事件 id），
+				// 不去重会导致同一条用户消息被处理多次、回复多条。
+				if (this.isDuplicate(payload)) break;
 				this.dispatch(payload);
 				break;
 			}
@@ -152,6 +157,24 @@ export class QQWebSocketReceiver extends EventEmitter {
 				properties: { $os: "linux", $browser: "arkham-chatbot", $device: "arkham-chatbot" },
 			},
 		});
+	}
+
+	/**
+	 * 判断 DISPATCH 事件是否为重复推送。用事件 id（payload.id 优先，回退 data.id）
+	 * 在有限窗口内去重。READY 等无 id 的控制事件不去重。
+	 */
+	private isDuplicate(payload: WsPayload): boolean {
+		const d = payload.d as { id?: string } | undefined;
+		const eventId = payload.id ?? d?.id;
+		if (eventId === undefined) return false;
+		if (this.seenEventIds.has(eventId)) {
+			console.log(`[qq-ws] 丢弃重复事件 ${eventId}`);
+			return true;
+		}
+		this.seenEventIds.add(eventId);
+		// 窗口上限 200，超出清空重建（简化处理，避免无限增长）。
+		if (this.seenEventIds.size > 200) this.seenEventIds.clear();
+		return false;
 	}
 
 	private dispatch(payload: WsPayload): void {

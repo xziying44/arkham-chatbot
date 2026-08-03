@@ -28,6 +28,11 @@ export interface BotSessionOptions {
 	readonly persona?: string;
 	/** 额外的自定义工具（在默认 bash/read/edit/write 之上）。 */
 	readonly extraTools?: AgentTool[];
+	/**
+	 * 共享的"当前被动消息 id"容器：prompt 时写入，工具执行期间读取。
+	 * 由 SessionManager 创建，与 extraToolsFactory 共享同一引用。
+	 */
+	readonly replyToHolder?: { current?: string };
 }
 
 export class ChatBotSession {
@@ -66,6 +71,7 @@ export class ChatBotSession {
 			},
 			streamFn: this.opts.streamFn,
 		});
+		console.log(`[bot] activate scope=${this.opts.scope.kind}:${this.opts.scope.id} tools=[${this.tools.map((t) => t.name).join(",")}]`);
 	}
 
 	/**
@@ -73,13 +79,19 @@ export class ChatBotSession {
 	 * 收集 assistant 的文本内容拼接；若 Agent 末轮无文本产出（例如只调了工具），
 	 * 返回空串，由上层决定是否补一句默认回复。
 	 */
-	async prompt(text: string): Promise<string> {
+	/**
+	 * 处理一条入站消息，返回完整回复文本。
+	 * @param replyToMsgId 当前入站消息的平台 id，供 send_image 等工具作为被动回复引用。
+	 */
+	async prompt(text: string, replyToMsgId?: string): Promise<string> {
+		if (this.opts.replyToHolder) this.opts.replyToHolder.current = replyToMsgId;
 		const collector = new AssistantTextCollector();
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
 		try {
 			await this.agent.prompt(text);
 		} finally {
 			unsubscribe();
+			if (this.opts.replyToHolder) this.opts.replyToHolder.current = undefined;
 		}
 		return collector.text;
 	}

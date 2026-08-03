@@ -53,6 +53,11 @@ export class QQClient {
 	private readonly opts: Required<QQClientOptions>;
 	private accessToken: string | undefined;
 	private expiresAt: number = 0; // 秒级时间戳
+	/**
+	 * 被动消息序号：QQ 要求 msg_id + msg_seq 配合，同一 msg_id 下 msg_seq 递增才能发多条
+	 * （否则报 40054005 消息被去重）。这里全局递增，保证每次发送的 msg_seq 唯一。
+	 */
+	private msgSeq = 0;
 	private refreshPromise: Promise<string> | undefined;
 
 	constructor(opts: QQClientOptions) {
@@ -168,7 +173,9 @@ export class QQClient {
 	}
 
 	private async sendMessage(scope: ScopeTarget, payload: Record<string, unknown>): Promise<SendOutcome> {
-		const res = await this.authedPost(`${scope.path}/messages`, payload);
+		// 被动消息必须带 msg_seq（与 msg_id 配合），否则同 msg_id 重复发送会被去重（40054005）。
+		const fullPayload = { ...payload, msg_seq: ++this.msgSeq };
+		const res = await this.authedPost(`${scope.path}/messages`, fullPayload);
 		if (!res.ok) {
 			throw new Error(`sendMessage(${scope.path}) failed: ${res.status} ${await res.text()}`);
 		}
