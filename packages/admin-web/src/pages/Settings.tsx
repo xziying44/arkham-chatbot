@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
-import { Card, Form, Input, InputNumber, Switch, Button, Space, Typography, App as AntdApp, Collapse, Tag, Alert } from "antd";
+import { Card, Form, Input, InputNumber, Switch, Button, Space, Typography, App as AntdApp, Alert } from "antd";
 import { api } from "../api/client";
-import type { PromptPreview, Settings as SettingsType } from "../api/types";
+import type { Settings as SettingsType } from "../api/types";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsType>({});
-  const [prompts, setPrompts] = useState<PromptPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const { message, modal } = AntdApp.useApp();
@@ -13,9 +12,7 @@ export default function SettingsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [s, p] = await Promise.all([api.getSettings(), api.getPrompts()]);
-      setSettings(s);
-      setPrompts(p);
+      setSettings(await api.getSettings());
     } finally {
       setLoading(false);
     }
@@ -105,22 +102,6 @@ export default function SettingsPage() {
             <Button onClick={reapAll}>回收所有会话</Button>
           </Space>
         </Form>
-      </Card>
-
-      <Card title="系统提示词预览（只读）" style={{ marginBottom: 16 }}>
-        <p>
-          默认工具：
-          {prompts?.tools.map((t) => <Tag key={t.name}>{t.name}</Tag>)}
-        </p>
-        <Collapse
-          items={[
-            {
-              key: "template",
-              label: "提示词模板（占位符为运行时填充）",
-              children: <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{prompts?.template}</pre>,
-            },
-          ]}
-        />
       </Card>
     </div>
   );

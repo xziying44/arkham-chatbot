@@ -29,9 +29,21 @@ export interface ScopeDetail {
   scope: { kind: "group" | "user"; id: string };
   systemPrompt: string;
   tools: { name: string; description: string }[];
-  messages: unknown[];
+  messages: AgentMessage[];
   messageCount: number;
   lastActivityAt: number;
+}
+
+/** pi-agent-core 的消息（只取前端渲染关心的字段）。 */
+export interface AgentMessage {
+  role: string;
+  content?: unknown;
+  // pi-agent-core 扩展消息可能带的字段
+  command?: string;
+  text?: string;
+  toolName?: string;
+  timestamp?: number;
+  [key: string]: unknown;
 }
 
 export interface Message {

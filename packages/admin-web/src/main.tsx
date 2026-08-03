@@ -10,9 +10,11 @@ import Layout from "./layout/Layout";
 import Dashboard from "./pages/Dashboard";
 import Bots from "./pages/Bots";
 import Sessions from "./pages/Sessions";
+import SessionDetail from "./pages/SessionDetail";
 import Messages from "./pages/Messages";
 import Logs from "./pages/Logs";
 import Settings from "./pages/Settings";
+import Prompts from "./pages/Prompts";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -32,8 +34,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route index element={<Dashboard />} />
               <Route path="bots" element={<Bots />} />
               <Route path="sessions" element={<Sessions />} />
+              <Route path="sessions/:botId/:kind/:scopeId" element={<SessionDetail />} />
               <Route path="messages" element={<Messages />} />
               <Route path="logs" element={<Logs />} />
+              <Route path="prompts" element={<Prompts />} />
               <Route path="settings" element={<Settings />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
