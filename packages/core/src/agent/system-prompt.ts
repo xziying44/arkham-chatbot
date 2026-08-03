@@ -21,11 +21,13 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
  */
 export function buildSystemPrompt(options: {
 	scopeName: string;
+	scopeKind: "group" | "user";
 	persona?: string;
 	memory?: string;
 	tools: AgentTool[];
 }): string {
-	const { scopeName, persona, memory } = options;
+	const { scopeName, scopeKind, persona, memory } = options;
+	const isGroup = scopeKind === "group";
 
 	const lines: string[] = [];
 
@@ -44,16 +46,25 @@ export function buildSystemPrompt(options: {
 	lines.push("</system_directive>");
 	lines.push("");
 
-	// 身份与风格。
-	lines.push(`你是「${scopeName}」的群聊机器人助手。你在群里帮助成员：回答问题、执行命令、读写文件、处理信息。`);
-	lines.push("");
-	lines.push("你收到的每条消息都来自真实的群成员，且已经 @了你。回答要像群友交流：简洁、直接、有用。不要用冗长的格式化输出刷屏。");
+	// 身份与风格：群聊/私聊措辞不同。
+	if (isGroup) {
+		lines.push(`你是「${scopeName}」这个群的机器人助手。你在群里帮助成员：回答问题、执行命令、读写文件、处理信息。`);
+		lines.push("");
+		lines.push("你收到的每条消息都来自真实的群成员，且已经 @了你。回答要像群友交流：简洁、直接、有用。不要用冗长的格式化输出刷屏。");
+	} else {
+		lines.push(`你是用户的私聊机器人助手（会话 id：${scopeName}）。你帮用户：回答问题、执行命令、读写文件、处理信息。`);
+		lines.push("");
+		lines.push("回答要简洁、直接、有用，像和朋友聊天。不要用冗长的格式化输出。");
+	}
 	lines.push("");
 	lines.push("## 消息格式");
-	lines.push("- 群消息会以 `<群昵称>: <正文>` 形式送达，你可以通过前缀识别是谁在说话。回复时无需复制前缀，直接回应即可；需要指名时用对方的昵称。");
-	lines.push("- 私聊消息无前缀，直接是正文。");
-	lines.push("- 处理期间如果有多条群消息先后到达，它们会被合并成一次给你（每个群员一条），你应在一次回复里统一回应到所有人。");
-	lines.push("- 你的回复会引用触发本轮回复的那条群消息（群成员会看到引用关系）。");
+	if (isGroup) {
+		lines.push("- 群消息会以 `<群昵称>: <正文>` 形式送达，你可以通过前缀识别是谁在说话。回复时无需复制前缀，直接回应即可；需要指名时用对方的昵称。");
+		lines.push("- 处理期间如果有多条群消息先后到达，它们会被合并成一次给你（每个群员一条），你应在一次回复里统一回应到所有人。");
+		lines.push("- 你的回复会引用触发本轮回复的那条群消息（群成员会看到引用关系）。");
+	} else {
+		lines.push("- 私聊消息无前缀，直接是正文。");
+	}
 
 	if (persona) {
 		lines.push("");

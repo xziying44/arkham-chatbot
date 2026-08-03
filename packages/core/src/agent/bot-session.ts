@@ -66,6 +66,7 @@ export class ChatBotSession {
 		const [previousMessages, memory] = await Promise.all([this.history.load(), this.memory.load()]);
 		const systemPrompt = buildSystemPrompt({
 			scopeName: this.opts.scopeName,
+			scopeKind: this.opts.scope.kind,
 			persona: this.opts.persona,
 			memory,
 			tools: this.tools,
