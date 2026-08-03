@@ -182,26 +182,7 @@ export class SessionManager {
 		this.active.delete(key);
 		if (entry.reaper) clearTimeout(entry.reaper);
 
-		await entry.session.dispose(async () => this.summarize(entry.session.messages));
-	}
-
-	/** 用 pi generateSummary 把会话压缩成 Markdown 记忆。 */
-	private async summarize(messages: AgentMessage[]): Promise<string | undefined> {
-		if (messages.length === 0) return undefined;
-		try {
-			const { generateSummary } = await import("@earendil-works/pi-agent-core");
-			const result = await generateSummary(
-				messages,
-				this.opts.models,
-				this.opts.model,
-				2048,
-				undefined,
-				"为这个群聊会话生成一段简洁的长期记忆 Markdown：保留成员关心的关键事实、未完成的任务、机器人的人设演变。避免逐条复述对话。",
-			);
-			return result.ok ? result.value : undefined;
-		} catch {
-			return undefined;
-		}
+		await entry.session.dispose();
 	}
 
 	/** 扫描所有活跃 entry，回收超时者（双重保险：定时器 + 扫描）。 */

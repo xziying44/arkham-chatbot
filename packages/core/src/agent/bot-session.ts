@@ -178,17 +178,51 @@ export class ChatBotSession {
 	}
 
 	/**
-	 * 回收：把当前会话压缩成记忆、落盘历史，然后释放 Agent。
-	 * @param summarize 由 SessionManager 注入的摘要函数（封装 pi generateSummary）。
+	 * 回收：让 agent 自己总结会话并写入 memory.md，落盘历史，然后释放 Agent。
+	 *
+	 * 摘要由 agent 基于自己的完整上下文（系统提示词+记忆+对话历史）自行生成，
+	 * 而非外部 generateSummary——agent 最清楚哪些重要、该带什么到下次。
+	 * 给 agent 发一条「请总结」的消息，收集它的回复文本作为 memory.md 内容。
 	 */
-	async dispose(summarize: () => Promise<string | undefined>): Promise<void> {
+	async dispose(): Promise<void> {
 		try {
-			const summary = await summarize();
+			// 让 agent 自己总结当前会话。它带着完整上下文，知道该保留什么。
+			const summary = await this.summarizeSelf();
 			if (summary) await this.memory.save(summary);
 			await this.history.save(this.agent.state.messages);
 		} finally {
 			this.agent.abort();
 			await this.agent.waitForIdle().catch(() => {});
+		}
+	}
+
+	/**
+	 * 让 agent 自己总结会话，返回摘要文本。
+	 * 复用 prompt 机制（带 replyToHolder 清理），收集 assistant 回复。
+	 */
+	private async summarizeSelf(): Promise<string | undefined> {
+		const messages = this.agent.state.messages;
+		if (messages.length === 0) return undefined;
+		try {
+			const collector = new AssistantTextCollector();
+			const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
+			try {
+				await this.agent.prompt(
+					"【系统】这个会话即将被回收（1 小时无活动）。请基于以上全部对话，总结一段简洁的会话摘要写入你的长期记忆，供下次会话激活时续接上下文。\n\n" +
+						"要求：\n" +
+						"- 用 Markdown，控制在 500 字以内\n" +
+						"- 保留：关键事实、未完成的任务、重要的用户偏好/约定、你的人设演变\n" +
+						"- 不要逐条复述对话，只提炼对未来有用的信息\n" +
+						"- 如果对话没什么值得记住的，回复「（无重要内容）」\n\n" +
+						"直接输出摘要内容，不要调用工具。",
+				);
+			} finally {
+				unsubscribe();
+			}
+			const text = collector.text;
+			return text && !text.includes("（无重要内容）") ? text : undefined;
+		} catch {
+			return undefined;
 		}
 	}
 
