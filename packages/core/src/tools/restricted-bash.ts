@@ -8,12 +8,13 @@ import { type Static, Type } from "typebox";
  * 群聊场景下，不能让网友通过 agent 执行任意命令（即使沙箱隔离）。
  * 这个工具替代通用 createBashTool，只放行：
  * - 文件查看类：ls/cat/head/tail/find/grep/wc/file/stat/tree/dir
- * - 文本处理：echo/mkdir（仅 workspace 内）/touch（仅 workspace 内）
+ * - 文件操作：mkdir/touch/cp/mv/rm（沙箱工作目录内，影响不了外部）
+ * - 文本处理：echo/sed/awk/sort/uniq/cut/tr 等
  * - 技能专用：arkham-cli（DIY 卡图渲染）
- * - 其它只读命令
  *
- * 拒绝：任何形式的脚本执行（python/node/ruby/sh -c）、网络命令、
- * 系统探测、文件修改（rm/mv/cp/chmod）等。
+ * 拒绝：脚本执行（python/node/ruby/perl/sh -c）、网络命令、
+ * 系统探测（ps/kill/systemctl）等真正危险的命令。
+ * 文件删除/移动在沙箱内是安全的（只影响工作目录），不拦截。
  */
 
 const restrictedBashSchema = Type.Object({
@@ -34,12 +35,10 @@ const ALLOWED_COMMANDS = new Set([
 	"file", "stat", "tree", "dir",
 	"realpath", "readlink", "basename", "dirname",
 	"diff",
-	// 目录操作（仅创建，不删除）
-	"mkdir",
-	"touch",
-	// 文本输出
-	"echo",
-	"printf",
+	// 文件操作（沙箱内安全，只影响工作目录）
+	"mkdir", "touch", "cp", "mv", "rm", "rmdir",
+	// 文本处理
+	"echo", "printf",
 	"sort", "uniq", "cut", "tr", "awk", "sed",
 	// 技能专用
 	"arkham-cli",
@@ -47,9 +46,11 @@ const ALLOWED_COMMANDS = new Set([
 
 /**
  * 禁止的命令模式（即使白名单里有，也额外拦截危险用法）。
+ * 只拦真正危险的：脚本执行、网络、系统探测。
+ * 文件删除/移动在沙箱内是安全的（只影响工作目录），不拦截。
  */
 const FORBIDDEN_PATTERNS: readonly RegExp[] = [
-	// 脚本执行
+	// 脚本执行（可执行任意代码，绕过所有限制）
 	/\bpython\d?\b/,
 	/\bnode\b/,
 	/\bruby\b/,
@@ -61,17 +62,16 @@ const FORBIDDEN_PATTERNS: readonly RegExp[] = [
 	/\bzsh\b/,
 	/\b\d?sh\s+-c\b/,
 	// 网络（command-guard 已有，这里再兜一次）
-	/\bcurl\b/, /\bwget\b/, /\bnc\b/, /\bssh\b/, /\bscp\b/,
-	// 破坏性
-	/\brm\b/, /\brmdir\b/, /\bmv\b/, /\bcp\b/,
-	/\bchmod\b/, /\bchown\b/, /\btruncate\b/,
-	// 重定向到敏感位置
-	/>\/etc\//, />\/root/, />\/home\/[^/]+\/\./,
-	// 进程/系统
-	/\bps\b/, /\bkill\b/, /\bpkill\b/, /\btop\b/, /\bhtop\b/,
+	/\bcurl\b/, /\bwget\b/, /\bnc\b/, /\bssh\b/, /\bscp\b/, /\brsync\b/,
+	// 系统探测/控制
+	/\bps\b/, /\bkill\b/, /\bpkill\b/, /\bkillall\b/, /\btop\b/, /\bhtop\b/,
 	/\bsystemctl\b/, /\bservice\b/,
+	/\bifconfig\b/, /\bip\s+(addr|route|link)\b/, /\bhostname\b/, /\buname\b/,
+	/\bwhoami\b/, /\bid\b/, /\benv\b/, /\bprintenv\b/,
 	// 管道到脚本执行
 	/\|\s*(python|node|ruby|perl|sh|bash)/,
+	// 重定向到敏感位置
+	/>\/etc\//, />\/root/, />\/home\/[^/]+\/\./,
 ];
 
 /**
@@ -145,8 +145,8 @@ export function createRestrictedBashTool(env: ExecutionEnv): AgentTool<typeof re
 		name: "bash",
 		label: "bash",
 		description:
-			"执行受限的 shell 命令。仅允许文件查看类命令（ls/cat/grep/find 等）和指定工具（arkham-cli）。" +
-			"不允许执行脚本（python/node）、网络请求、文件删除或任何系统操作。",
+			"执行受限的 shell 命令。允许文件操作（ls/cat/grep/find/cp/mv/rm/mkdir 等）和指定工具（arkham-cli）。" +
+			"不允许执行脚本（python/node/sh）、网络请求（curl/wget）或系统操作（ps/kill/systemctl）。",
 		parameters: restrictedBashSchema,
 		async execute(_toolCallId, params, signal) {
 			const { command, timeout } = params;
