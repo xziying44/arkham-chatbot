@@ -101,11 +101,27 @@ export class QQAdapter implements ImAdapter {
 		// agent 自行决定是否在文本里写 <qqbot-at-user id="openid" /> 标签来 @ 人。
 		// adapter 不再自动拼接 @ ——由 agent 根据语境判断（显性对某人说才 @，闲聊不 @）。
 		// 优先发 Markdown（msg_type=2），失败则降级为纯文本（msg_type=0）。
+		// 若因 msg_id 过期（11244）失败，去掉 msg_id 重试（发主动消息）。
 		try {
 			await this.client.sendMarkdown(target, text, replyToMessageId);
 		} catch (mdError) {
-			console.warn("[qq-adapter] markdown 发送失败，降级纯文本:", (mdError as Error).message);
-			await this.client.sendText(target, text, replyToMessageId);
+			const mdMsg = (mdError as Error).message;
+			console.warn("[qq-adapter] markdown 发送失败，降级纯文本:", mdMsg);
+			// msg_id 过期 → 不带 msg_id 重试
+			const expired = mdMsg.includes("11244") || mdMsg.includes("token not exist");
+			const retryMsgId = expired ? undefined : replyToMessageId;
+			try {
+				await this.client.sendText(target, text, retryMsgId);
+			} catch (textError) {
+				const textMsg = (textError as Error).message;
+				if (textMsg.includes("11244") || textMsg.includes("token not exist")) {
+					// 纯文本也因 msg_id 过期失败 → 最后一次尝试：不带 msg_id
+					console.warn("[qq-adapter] msg_id 过期，尝试主动消息（不带 msg_id）");
+					await this.client.sendText(target, text, undefined);
+				} else {
+					throw textError;
+				}
+			}
 		}
 	}
 
