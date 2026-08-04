@@ -130,9 +130,11 @@ mkdir -p cards/out
 .arkham/bin/arkham-cli render \
   --corpus cards/in \
   --assets .arkham/assets \
+  --workspace . \
   --out cards/out
 ```
 
+- `--workspace .` **必须带**：用于解析 .card 里 `picture_path` 的 `@` 前缀路径（如 `@inbox/xxx.jpg` → `./inbox/xxx.jpg`）。漏了这个参数，用户提供的底图不会贴到卡面上。
 - 渲染耗时约 1-3 秒。
 - 输出文件：`cards/out/000.png`（文件名 = .card 文件的前 3 位数字）。
 - 看输出里的 `[OK ]` / `[ERR]` 行判断成功与否。若 `[ERR]`，看错误信息修正 JSON 后重试。
