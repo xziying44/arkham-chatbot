@@ -5,6 +5,7 @@ import type { StreamFn, Skill } from "@earendil-works/pi-agent-core";
 import {
 	SessionManager,
 	createSendImageTool,
+	createAskUserTool,
 	createLogger,
 	loadSkillsFromDir,
 	type Logger,
@@ -267,14 +268,21 @@ export class BotManager {
 			reaperIntervalMs: this.opts.reaperIntervalMs,
 			persona: config.persona ?? undefined,
 			skills: this.skills,
-			extraToolsFactory: (scope, getReplyToMsgId, workspaceDir) => [
+			extraToolsFactory: (scope, getReplyToMsgId, _workspaceDir, pendingAskHolder) => [
 				createSendImageTool({
 					scopeId: scope.id,
 					getReplyToMsgId,
-					workspaceDir,
+					workspaceDir: `${this.botDataDir(config.id)}/${scope.kind}/${scope.id}/workspace`,
 					send: async (scopeId, filePath, replyToMsgId) => {
 						const scopeKey: ScopeKey = { kind: scope.kind, id: scopeId };
 						await adapter.sendImage(scopeKey, filePath, replyToMsgId);
+					},
+				}),
+				createAskUserTool({
+					getReplyToMsgId,
+					pendingAskHolder,
+					sendKeyboard: async (content, keyboard, replyToMsgId) => {
+						await adapter.sendKeyboard?.(scope, content, keyboard, replyToMsgId);
 					},
 				}),
 			],

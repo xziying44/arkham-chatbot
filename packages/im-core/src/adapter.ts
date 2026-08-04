@@ -25,6 +25,20 @@ export interface ImAdapter extends AsyncDisposable {
 	disconnect(): Promise<void>;
 	/** 连接是否处于活跃状态。 */
 	readonly isConnected: boolean;
+	/**
+	 * 发送带内嵌按钮的消息（可选，不支持按钮的 IM 不实现）。
+	 * @param content 消息正文（markdown）
+	 * @param keyboard 平台相关的按钮结构（QQ 的 KeyboardPayload）
+	 * @param replyToMessageId 被引用消息 id（被动回复）
+	 */
+	sendKeyboard?(scope: ScopeKey, content: string, keyboard: unknown, replyToMessageId?: string): Promise<void>;
+	/**
+	 * 应答交互事件（可选）。收到按钮点击回调后须在平台时限内调用，
+	 * 否则用户端可能一直 loading。
+	 * @param interactionId 交互事件 id
+	 * @param code 应答结果（0=成功 等，平台相关）
+	 */
+	replyInteraction?(interactionId: string, code?: number): Promise<void>;
 }
 
 /** 适配器配置基类：所有 IM 适配器共享的最小配置项。 */

@@ -109,6 +109,15 @@ export function buildSystemPrompt(options: {
 	lines.push("- send_message 的 text 支持 QQ markdown：加粗 **、列表、引用 >、标题 # 等。");
 
 	lines.push("");
+	lines.push("### 向用户提问（ask_user）—— 优先使用！");
+	lines.push("当你需要让用户在**有限的几个选项中做选择**时，**必须用 `ask_user` 而非 send_message**。用户会收到带按钮的消息，点击即可，比打字方便得多。");
+	lines.push("- **遇到选择题就调 ask_user**：选卡类型（支援卡/事件卡/技能卡）、选职业（守护者/探求者/流浪者/潜修者/生存者）、确认方案（确认/重来）、选数量等。");
+	lines.push("- 推荐选项放第一个，label 简短（2-6 字），如「守护者(推荐)」「探求者」「生存者」。");
+	lines.push("- **不适合**开放式问题（如「卡牌叫什么名字」「效果是什么」）——那种用 send_message 问。");
+	lines.push("- 调用后工具阻塞等待用户点击（最多 5 分钟）。用户也可能不点按钮直接打字——工具会返回文字，你据此继续。");
+	lines.push("- 示例：用户说「帮我做张卡」→ 你先 `ask_user(\"想做什么类型的卡？\", [{label:\"支援卡\"},{label:\"事件卡\"},{label:\"技能卡\"},{label:\"敌人卡\"}])`。");
+
+	lines.push("");
 	lines.push("## 回复格式（重要）");
 	lines.push("你的回复会以 QQ markdown 渲染，但只支持有限语法。务必遵守：");
 	lines.push("- 可用：一级/二级标题（# / ##）、加粗 **、斜体、删除线 ~~、链接 []()、有序/无序列表、引用 >、分割线。");

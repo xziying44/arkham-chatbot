@@ -3,6 +3,7 @@ import type { Model, Models } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import { ChatBotSession } from "../agent/bot-session.ts";
+import type { PendingAskHolder } from "../tools/ask-user.ts";
 import type { ScopeKey } from "../identity/scope.ts";
 import { scopeKeyStr } from "../identity/scope.ts";
 import type { IncomingMessage, OutgoingMessage } from "./message.ts";
@@ -30,15 +31,17 @@ export interface SessionManagerOptions {
 	/** 已加载的技能清单（所有 scope 共享，filePath 已重写为沙箱内路径）。 */
 	readonly skills?: Skill[];
 	/**
-	 * 按 scope 生成额外工具（如 send_image）。每个 scope 激活时调用一次，
+	 * 按 scope 生成额外工具（如 send_image、ask_user）。每个 scope 激活时调用一次，
 	 * 返回的工具会与默认 bash/read/edit/write 一起装入 Agent。
 	 * getReplyToMsgId 返回当前被动消息 id（工具执行期间有值），供需要被动回复引用的工具使用。
 	 * workspaceDir 为该 scope 的沙箱工作目录绝对路径，供需要做路径边界检查的工具使用。
+	 * pendingAskHolder 为该 scope 的挂起提问容器，ask_user 工具与 prompt 共享。
 	 */
 	readonly extraToolsFactory?: (
 		scope: ScopeKey,
 		getReplyToMsgId: () => string | undefined,
 		workspaceDir: string,
+		pendingAskHolder: PendingAskHolder,
 	) => AgentTool[];
 	/**
 	 * 中间消息发送回调。当 agent 在工具调用之间输出了文字时调用，
@@ -54,6 +57,8 @@ export interface SessionManagerOptions {
 
 interface ActiveEntry {
 	readonly session: ChatBotSession;
+	/** 该 scope 的挂起提问容器（ask_user 工具与 prompt/dispatchInteraction 共享）。 */
+	readonly pendingAskHolder: PendingAskHolder;
 	lastActivityAt: number;
 	/** 回收定时器。 */
 	reaper: ReturnType<typeof setTimeout>;
@@ -129,6 +134,20 @@ export class SessionManager {
 		};
 	}
 
+	/**
+	 * 处理按钮点击回调（INTERACTION_CREATE）。
+	 *
+	 * 找到对应 scope 的挂起提问，resolve 它（把按钮 data 作为用户的选择）。
+	 * 如果没有挂起提问（用户乱点过期的按钮），静默忽略。
+	 */
+	dispatchInteraction(scope: ScopeKey, callback: { interactionId: string; buttonData?: string; buttonId?: string }): void {
+		const entry = this.active.get(scopeKeyStr(scope));
+		const pending = entry?.pendingAskHolder.current;
+		if (pending) {
+			pending.resolve(callback.buttonData ?? callback.buttonId ?? "unknown");
+		}
+	}
+
 	/** 关闭所有会话：回收记忆 + 落盘，停止扫描器。 */
 	async shutdown(): Promise<void> {
 		this.shuttingDown = true;
@@ -154,7 +173,9 @@ export class SessionManager {
 		// 共享 holder：factory 创建的工具读它，ChatBotSession.prompt 写它。
 		// 让 send_image 等工具能拿到当前被动消息 id（群消息发图必须带 msg_id）。
 		const replyToHolder: { current?: string } = {};
-		const extraTools = this.opts.extraToolsFactory?.(scope, () => replyToHolder.current, workspaceDir) ?? [];
+		// 挂起提问容器：ask_user 工具写，dispatchInteraction（点按钮）/ prompt（发文字）读。
+		const pendingAskHolder: PendingAskHolder = {};
+		const extraTools = this.opts.extraToolsFactory?.(scope, () => replyToHolder.current, workspaceDir, pendingAskHolder) ?? [];
 		const session = new ChatBotSession({
 			scope,
 			scopeName: scope.id,
@@ -166,6 +187,7 @@ export class SessionManager {
 			skills: this.opts.skills,
 			extraTools,
 			replyToHolder,
+			pendingAskHolder,
 			onIntermediateText: this.opts.onIntermediateText
 				? (text: string) => this.opts.onIntermediateText!(scope, text, replyToHolder.current)
 				: undefined,
@@ -177,6 +199,7 @@ export class SessionManager {
 
 		const entry: ActiveEntry = {
 			session,
+			pendingAskHolder,
 			lastActivityAt: Date.now(),
 			reaper: undefined as unknown as ReturnType<typeof setTimeout>,
 		};

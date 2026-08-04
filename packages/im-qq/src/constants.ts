@@ -42,8 +42,8 @@ export enum Intent {
 	PUBLIC_GUILD_MESSAGES = 1 << 30,
 }
 
-/** 默认订阅：群聊/私聊消息 + 群成员变更。 */
-export const DEFAULT_INTENTS = Intent.GROUP_AND_C2C_EVENT | Intent.GROUP_MEMBER;
+/** 默认订阅：群聊/私聊消息 + 群成员变更 + 互动事件（按钮回调）。 */
+export const DEFAULT_INTENTS = Intent.GROUP_AND_C2C_EVENT | Intent.GROUP_MEMBER | Intent.INTERACTION;
 
 /** READY 事件标识。 */
 export const READY_EVENT = "READY";
@@ -51,6 +51,8 @@ export const READY_EVENT = "READY";
 export const GROUP_AT_MESSAGE_CREATE = "GROUP_AT_MESSAGE_CREATE";
 /** C2C 私聊消息事件。 */
 export const C2C_MESSAGE_CREATE = "C2C_MESSAGE_CREATE";
+/** 互动事件（按钮点击回调）。 */
+export const INTERACTION_CREATE = "INTERACTION_CREATE";
 
 /** 默认心跳间隔兜底（毫秒），以 HELLO 返回的 heartbeat_interval 为准。 */
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;

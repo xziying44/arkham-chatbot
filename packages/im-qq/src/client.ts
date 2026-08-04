@@ -2,6 +2,7 @@ import type {
 	AccessTokenResponse,
 	FileType,
 	FileUploadResult,
+	KeyboardPayload,
 	MessageAuditResult,
 	SendMessageResult,
 	WsGatewayInfo,
@@ -151,6 +152,35 @@ export class QQClient {
 	}
 
 	/**
+	 * 发送带内嵌按钮的消息（markdown 正文 + keyboard）。
+	 * 自定义 keyboard 已对群聊/单聊开放（需机器人在白名单，否则报权限错误）。
+	 * 用户点击回调按钮（action.type=1）后触发 INTERACTION_CREATE 事件，
+	 * 机器人须 3 秒内 PUT /interactions/{id} 应答。
+	 */
+	async sendKeyboard(scope: ScopeTarget, content: string, keyboard: KeyboardPayload, msgId?: string): Promise<SendOutcome> {
+		return this.sendMessage(scope, {
+			msg_type: 2,
+			msg_id: msgId,
+			markdown: { content },
+			keyboard,
+		});
+	}
+
+	/**
+	 * 应答交互事件（PUT /interactions/{interaction_id}）。
+	 * 收到 INTERACTION_CREATE 后须在 3 秒内调用，否则用户端一直转圈 loading。
+	 * 同一 interaction_id 只能应答一次。
+	 * @param interactionId 事件 id（InteractionData.id）
+	 * @param code 回调结果：0=成功 1=失败 2=太频繁 3=重复操作 4=无权限 5=仅管理员
+	 */
+	async replyInteraction(interactionId: string, code: 0 | 1 | 2 | 3 | 4 | 5 = 0): Promise<void> {
+		const res = await this.authedPut(`/interactions/${interactionId}`, { code });
+		if (!res.ok) {
+			throw new Error(`replyInteraction failed: ${res.status} ${await res.text()}`);
+		}
+	}
+
+	/**
 	 * 上传富媒体文件（本地 base64），返回 file_info。
 	 * QQ 支持 file_data 字段传 base64 字符串（官方 Python SDK botpy#199 引入）。
 	 * @param scope 目标 scope（决定 /groups/ 还是 /users/ 的 files 端点）
@@ -209,6 +239,18 @@ export class QQClient {
 		const token = await this.getAccessToken();
 		return this.fetchWithTimeout(`${this.opts.apiBase}${path}`, {
 			method: "POST",
+			headers: {
+				Authorization: `QQBot ${token}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(body),
+		});
+	}
+
+	private async authedPut(path: string, body: unknown): Promise<Response> {
+		const token = await this.getAccessToken();
+		return this.fetchWithTimeout(`${this.opts.apiBase}${path}`, {
+			method: "PUT",
 			headers: {
 				Authorization: `QQBot ${token}`,
 				"Content-Type": "application/json",

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { buildSystemPrompt } from "./system-prompt.ts";
 import { createDefaultTools } from "../tools/index.ts";
 import { createSendMessageTool } from "../tools/send-message.ts";
+import type { PendingAskHolder } from "../tools/ask-user.ts";
 import { HistoryStore } from "../session/history.ts";
 import { MemoryStore } from "../session/memory.ts";
 import { MemoryFiles } from "../session/memory-files.ts";
@@ -48,6 +49,11 @@ export interface BotSessionOptions {
 	 * agent 的文字输出不自动发送——只有主动调用 send_message 才发送。
 	 */
 	readonly onSendMessage?: (text: string) => Promise<void>;
+	/**
+	 * 挂起提问容器：ask_user 工具写入 PendingAsk，prompt 在收到用户文字消息时
+	 * 读取并 reject（把文字作为响应）。由 SessionManager 创建，与工具共享同一引用。
+	 */
+	readonly pendingAskHolder?: PendingAskHolder;
 }
 
 export class ChatBotSession {
@@ -178,6 +184,14 @@ export class ChatBotSession {
 
 		// 忙 → steer 注入，等当前 run 的回复（回复引用触发消息）。
 		if (this.runInFlight) {
+			// 拦截：如果 agent 正在等 ask_user 响应（pendingAsk 挂起），
+			// 用户发了消息（点按钮自动发送 或 手动打字）→ 取消提问，消息内容作为响应返回给工具。
+			// 此时消息已被 ask_user 工具消费，不再 steer（避免 agent 重复看到同一条消息导致重复回复）。
+			const pending = this.opts.pendingAskHolder?.current;
+			if (pending) {
+				pending.reject(message.text);
+				return this.runInFlight.then((text) => ({ text, replyToMessageId: this.opts.replyToHolder?.current }));
+			}
 			this.agent.steer({ role: "user", content: formatted, timestamp: Date.now() });
 			return this.runInFlight.then((text) => ({ text, replyToMessageId: this.opts.replyToHolder?.current }));
 		}

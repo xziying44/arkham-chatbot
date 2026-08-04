@@ -9,6 +9,8 @@ export { createSendImageTool } from "./tools/send-image.ts";
 export type { CreateSendImageToolOptions, ImageSender, SendImageInput } from "./tools/send-image.ts";
 export { createSendMessageTool } from "./tools/send-message.ts";
 export type { CreateSendMessageToolOptions } from "./tools/send-message.ts";
+export { createAskUserTool } from "./tools/ask-user.ts";
+export type { CreateAskUserToolOptions, PendingAsk, PendingAskHolder, AskUserInput } from "./tools/ask-user.ts";
 export { createRestrictedBashTool, reviewBashCommand } from "./tools/restricted-bash.ts";
 export { loadSkillsFromDir, SANDBOX_SKILLS_DIR } from "./skills/skill-loader.ts";
 export { SessionManager } from "./session/session-manager.ts";

@@ -3,10 +3,11 @@ import type { QQClient } from "./client.ts";
 import {
 	C2C_MESSAGE_CREATE,
 	DEFAULT_HEARTBEAT_INTERVAL_MS,
+	DEFAULT_INTENTS,
 	DEFAULT_MAX_RETRIES,
 	FATAL_CLOSE_CODES,
 	GROUP_AT_MESSAGE_CREATE,
-	Intent,
+	INTERACTION_CREATE,
 	OpCode,
 	READY_EVENT,
 	RECONNECT_BASE_DELAY_MS,
@@ -16,6 +17,7 @@ import type {
 	C2cMessageData,
 	GroupAtMessageData,
 	HelloData,
+	InteractionData,
 	ReadyData,
 	WsPayload,
 } from "./types.ts";
@@ -67,7 +69,7 @@ export class QQWebSocketReceiver extends EventEmitter {
 	constructor(opts: QQWebSocketOptions) {
 		super();
 		this.client = opts.client;
-		this.intents = opts.intents ?? Intent.GROUP_AND_C2C_EVENT;
+		this.intents = opts.intents ?? DEFAULT_INTENTS;
 		this.maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
 	}
 
@@ -218,6 +220,11 @@ export class QQWebSocketReceiver extends EventEmitter {
 				timestamp: data.timestamp ?? "",
 				raw: data,
 			} satisfies QqIncomingMessage);
+			return;
+		}
+		if (payload.t === INTERACTION_CREATE) {
+			const data = payload.d as InteractionData;
+			this.emit("interaction", data);
 			return;
 		}
 		// 其它事件忽略。

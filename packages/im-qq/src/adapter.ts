@@ -3,6 +3,7 @@ import type { ImAdapter } from "@arkham/chatbot-im-core";
 import type { ImEvent } from "@arkham/chatbot-im-core";
 import { QQClient, groupTarget, userTarget, type ScopeTarget } from "./client.ts";
 import { QQWebSocketReceiver, type QqIncomingMessage } from "./websocket.ts";
+import type { InteractionData, KeyboardPayload } from "./types.ts";
 
 /**
  * QQ 官方 API v2 适配器，实现平台中立的 {@link ImAdapter}。
@@ -42,6 +43,7 @@ export class QQAdapter implements ImAdapter {
 			intents: opts.intents,
 		});
 		this.receiver.on("message", (msg: QqIncomingMessage) => this.onIncoming(msg));
+		this.receiver.on("interaction", (data: InteractionData) => this.onInteraction(data));
 		// 把 receiver 的生命周期事件映射到 phase，供管理端展示。
 		this.receiver.on("reconnecting", () => {
 			this.phase = "reconnecting";
@@ -133,6 +135,33 @@ export class QQAdapter implements ImAdapter {
 		await this.client.sendImageBase64(target, base64, replyToMessageId);
 	}
 
+	/**
+	 * 发送带按钮的消息（markdown 正文 + 内嵌 keyboard）。
+	 * 失败时降级为纯文本（不含按钮）。
+	 */
+	async sendKeyboard(scope: { kind: "group" | "user"; id: string }, content: string, keyboard: KeyboardPayload, replyToMessageId?: string): Promise<void> {
+		const target = this.toTarget(scope);
+		try {
+			await this.client.sendKeyboard(target, content, keyboard, replyToMessageId);
+		} catch (kbError) {
+			console.warn("[qq-adapter] keyboard 发送失败，降级纯文本:", (kbError as Error).message);
+			// 降级为纯文本（把选项列出来，至少文字能到）
+			const fallback = content + "\n（按钮不可用）";
+			try {
+				await this.client.sendMarkdown(target, fallback, replyToMessageId);
+			} catch {
+				await this.client.sendText(target, fallback, replyToMessageId);
+			}
+		}
+	}
+
+	/**
+	 * 应答交互事件（按钮点击后 3 秒内必须调用，否则用户端一直转圈）。
+	 */
+	async replyInteraction(interactionId: string, code?: 0 | 1 | 2 | 3 | 4 | 5): Promise<void> {
+		await this.client.replyInteraction(interactionId, code ?? 0);
+	}
+
 	private toTarget(scope: { kind: "group" | "user"; id: string }): ScopeTarget {
 		return scope.kind === "group" ? groupTarget(scope.id) : userTarget(scope.id);
 	}
@@ -159,6 +188,32 @@ export class QQAdapter implements ImAdapter {
 			mentioned: msg.kind === "group", // 群消息恒为 @机器人 触发
 			platformMessageId: msg.messageId,
 			raw: msg.raw,
+		};
+		for (const handler of this.handlers) {
+			try {
+				await handler(event);
+			} catch {
+				// 单个处理器失败不影响其它。
+			}
+		}
+	}
+
+	/**
+	 * 收到按钮点击回调（INTERACTION_CREATE），归一成 ImInteractionEvent 分发。
+	 */
+	private async onInteraction(data: InteractionData): Promise<void> {
+		console.log(`[qq-adapter] 收到按钮回调 id=${data.id} button_data=${data.data?.resolved?.button_data ?? "?"}`);
+		// 推导 scope：群聊用 group_openid，单聊用 user_openid。
+		const scope = data.scene === "group" || data.chat_type === 1
+			? groupScope(data.group_openid ?? "")
+			: userScope(data.user_openid ?? "");
+		const event: ImEvent = {
+			type: "interaction",
+			scope,
+			interactionId: data.id,
+			buttonData: data.data?.resolved?.button_data,
+			buttonId: data.data?.resolved?.button_id,
+			raw: data,
 		};
 		for (const handler of this.handlers) {
 			try {

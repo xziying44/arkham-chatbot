@@ -27,6 +27,21 @@ export function createMessageRouter(opts: MessageRouterOptions) {
 	const { adapter, sessions, botId, messages, logger } = opts;
 
 	return async function handle(event: ImEvent): Promise<void> {
+		// 按钮点击回调：立即应答平台（3 秒时限），再路由到 session 消费挂起的 ask_user。
+		if (event.type === "interaction") {
+			// 立即 PUT /interactions/{id} 应答，避免用户端一直 loading。
+			// fire-and-forget：即使应答失败也不影响 resolve ask_user。
+			adapter.replyInteraction?.(event.interactionId, 0).catch((e) => {
+				logger?.warn("应答交互事件失败", { interactionId: event.interactionId, error: (e as Error).message });
+			});
+			// resolve 对应 scope 的挂起提问（用户点了按钮 → 选择完成）。
+			sessions.dispatchInteraction(event.scope, {
+				interactionId: event.interactionId,
+				buttonData: event.buttonData,
+				buttonId: event.buttonId,
+			});
+			return;
+		}
 		if (event.type !== "message") return;
 		const incoming: IncomingMessage = {
 			scope: event.scope,
