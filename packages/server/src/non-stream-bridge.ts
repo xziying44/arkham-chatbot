@@ -101,28 +101,68 @@ function nonStreamOpenAI(
 			const url = `${baseUrl}/chat/completions`;
 
 			const body = buildRequestBody(model, context, options);
+			const msgCount = (body.messages as unknown[])?.length ?? 0;
+			const toolCount = (body.tools as unknown[])?.length ?? 0;
+			console.log(`[non-stream] → POST ${url} model=${model.id} msgs=${msgCount} tools=${toolCount}`);
 			const controller = new AbortController();
-			const timeout = setTimeout(() => controller.abort(), 120_000);
+			const timeout = setTimeout(() => {
+				console.log(`[non-stream] ⏱ 请求超时(120s)，中止`);
+				controller.abort();
+			}, 120_000);
 			if (options && typeof (options as { signal?: AbortSignal }).signal?.addEventListener === "function") {
 				(options as { signal: AbortSignal }).signal.addEventListener("abort", () => controller.abort());
 			}
 
-			const res = await fetch(url, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${apiKey}`,
-					...(options && typeof (options as { headers?: Record<string, string> }).headers === "object"
-						? (options as { headers: Record<string, string> }).headers
-						: {}),
-				},
-				body: JSON.stringify(body),
-				signal: controller.signal,
-			});
+			const fetchStart = Date.now();
+			// 非流式请求 + 重试（端点可能偶发 500 Router.Unavailable）
+			let res: Response | null = null;
+			let lastError: string | null = null;
+			for (let attempt = 0; attempt < 3; attempt++) {
+				try {
+					res = await fetch(url, {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							Authorization: `Bearer ${apiKey}`,
+							...(options && typeof (options as { headers?: Record<string, string> }).headers === "object"
+								? (options as { headers: Record<string, string> }).headers
+								: {}),
+						},
+						body: JSON.stringify(body),
+						signal: controller.signal,
+					});
+					if (res.ok) break;
+					// 5xx 可重试
+					if (res.status >= 500 && attempt < 2) {
+						const errBody = await res.text().catch(() => "");
+						console.log(`[non-stream] ← ${res.status} (attempt ${attempt + 1}), 重试...`);
+						lastError = `API ${res.status}: ${errBody.slice(0, 150)}`;
+						await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+						continue;
+					}
+					break;
+				} catch (fetchErr) {
+					lastError = (fetchErr as Error).message;
+					if (attempt < 2) {
+						console.log(`[non-stream] fetch异常 (attempt ${attempt + 1}): ${lastError}, 重试...`);
+						await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+						continue;
+					}
+					throw fetchErr;
+				}
+			}
 			clearTimeout(timeout);
+
+			if (!res || !res.ok) {
+				throw new Error(lastError ?? `API 返回失败`);
+			}
+
+			const elapsed = Date.now() - fetchStart;
+			console.log(`[non-stream] ← ${res.status} (${elapsed}ms)`);
 
 			if (!res.ok) {
 				const errText = await res.text().catch(() => res.statusText);
+				console.log(`[non-stream] ✗ API错误: ${errText.slice(0, 200)}`);
 				throw new Error(`API ${res.status}: ${errText.slice(0, 200)}`);
 			}
 
@@ -161,6 +201,7 @@ function nonStreamOpenAI(
 
 			const hasToolCalls = (msg.tool_calls?.length ?? 0) > 0;
 			const stopReason = hasToolCalls ? "toolUse" : choice.finish_reason === "length" ? "length" : "stop";
+			console.log(`[non-stream] 解析完成: content=${msg.content ? `"${msg.content.slice(0, 40)}"` : "null"} reasoning=${reasoning ? `${reasoning.length}字` : "无"} tools=${msg.tool_calls?.length ?? 0} stop=${stopReason}`);
 
 			const usage: Usage = {
 				input: data.usage?.prompt_tokens ?? 0,
