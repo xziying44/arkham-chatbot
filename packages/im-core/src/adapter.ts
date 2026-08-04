@@ -39,6 +39,11 @@ export interface ImAdapter extends AsyncDisposable {
 	 * @param code 应答结果（0=成功 等，平台相关）
 	 */
 	replyInteraction?(interactionId: string, code?: number): Promise<void>;
+	/**
+	 * 下载消息附件（可选，用户发的图片等）为 Buffer。
+	 * @param url 附件下载 URL（事件 attachments[].url）
+	 */
+	downloadAttachment?(url: string): Promise<Buffer>;
 }
 
 /** 适配器配置基类：所有 IM 适配器共享的最小配置项。 */

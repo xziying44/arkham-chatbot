@@ -45,6 +45,8 @@ export interface GroupAtMessageData {
 	};
 	/** 时间戳（秒，字符串）。 */
 	timestamp: string;
+	/** 附件列表（图片/视频/文件）。用户发图片时在此字段。 */
+	attachments?: MessageAttachment[];
 }
 
 /** C2C 私聊消息事件体（C2C_MESSAGE_CREATE）。字段路径以真实推送为准。 */
@@ -64,6 +66,28 @@ export interface C2cMessageData {
 	};
 	timestamp: string;
 	message_type?: number;
+	/** 附件列表（图片/视频/文件）。 */
+	attachments?: MessageAttachment[];
+}
+
+/**
+ * 消息附件（图片/视频/文件）。
+ * 用户在群里发图片时，QQ 推送的事件 attachments 字段含此结构。
+ * url 是临时下载链接，需尽快下载（有效期有限）。
+ */
+export interface MessageAttachment {
+	/** MIME 类型，如 "image/jpeg" | "image/png" | "image/gif"。 */
+	content_type: string;
+	/** 文件名。 */
+	filename: string;
+	/** 附件下载 URL（临时链接）。 */
+	url: string;
+	/** 图片宽度（像素，非图片附件无此字段）。 */
+	width?: number;
+	/** 图片高度（像素）。 */
+	height?: number;
+	/** 文件大小（字节）。 */
+	size?: number;
 }
 
 /** 获取 gateway WebSocket 地址的响应。 */

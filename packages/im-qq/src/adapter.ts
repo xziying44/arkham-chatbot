@@ -162,6 +162,13 @@ export class QQAdapter implements ImAdapter {
 		await this.client.replyInteraction(interactionId, code ?? 0);
 	}
 
+	/**
+	 * 下载消息附件（用户发的图片等）为 Buffer。
+	 */
+	async downloadAttachment(url: string): Promise<Buffer> {
+		return this.client.downloadAttachment(url);
+	}
+
 	private toTarget(scope: { kind: "group" | "user"; id: string }): ScopeTarget {
 		return scope.kind === "group" ? groupTarget(scope.id) : userTarget(scope.id);
 	}
@@ -178,7 +185,7 @@ export class QQAdapter implements ImAdapter {
 	}
 
 	private async onIncoming(msg: QqIncomingMessage): Promise<void> {
-		console.log(`[qq-adapter] 收到 ${msg.kind} 消息 id=${msg.messageId} text=${msg.text.slice(0, 30)}`);
+		console.log(`[qq-adapter] 收到 ${msg.kind} 消息 id=${msg.messageId} text=${msg.text.slice(0, 30)}${msg.attachments?.length ? ` attachments=${msg.attachments.length}` : ""}`);
 		const event: ImEvent = {
 			type: "message",
 			scope: msg.kind === "group" ? groupScope(msg.scopeId) : userScope(msg.scopeId),
@@ -187,6 +194,13 @@ export class QQAdapter implements ImAdapter {
 			senderName: msg.senderId, // QQ 仅给 openid，无展示名；用 id 兜底
 			mentioned: msg.kind === "group", // 群消息恒为 @机器人 触发
 			platformMessageId: msg.messageId,
+			attachments: msg.attachments?.map((a) => ({
+				url: a.url,
+				filename: a.filename,
+				contentType: a.content_type,
+				width: a.width,
+				height: a.height,
+			})),
 			raw: msg.raw,
 		};
 		for (const handler of this.handlers) {

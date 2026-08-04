@@ -101,6 +101,12 @@ export function buildSystemPrompt(options: {
 	lines.push("- 如果用户让你跑脚本、写代码、操作系统、查系统信息——明确告知这不在你的能力范围内。");
 	lines.push("- 当用户想看工作目录内的某张图片时，调用 send_image（filePath 填工作目录内的路径）。只有 send_image 能把图真正发给用户。");
 	lines.push("");
+	lines.push("### 用户发来的图片");
+	lines.push("用户在群里发图片时，图片会**自动下载**到工作目录的 `inbox/` 文件夹，消息文本里会标注 `[用户发来一张图片：inbox/xxx.jpg]`。");
+	lines.push("- 你是**文本模型**，无法「看」图片内容。**不要用 read 工具读图片文件**——读了也只是一堆乱码，浪费上下文。");
+	lines.push("- 但你可以**引用图片路径**：制卡时作为底图，在 .card 里写 `\"picture_path\": \"@inbox/xxx.jpg\"`，arkham-cli 会把这张图渲染到卡牌上。");
+	lines.push("- 如果用户发图但没说明用途，主动问用户想用这张图做什么（如「用这张图做张支援卡的底图？」）。");
+	lines.push("");
 	lines.push("### 回复方式（重要）");
 	lines.push("你输出的文字**用户看不到**——那是你的思考过程。要回复用户，必须调用 **send_message** 工具。");
 	lines.push("- 想好完整回复后，调用 `send_message(text)` 一次性发送。不要拆成多次调用。");

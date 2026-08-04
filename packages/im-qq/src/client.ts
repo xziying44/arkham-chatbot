@@ -217,6 +217,30 @@ export class QQClient {
 		return this.sendMedia(scope, fileInfo, msgId);
 	}
 
+	/**
+	 * 下载消息附件（用户发的图片等）为 Buffer。
+	 * URL 是 QQ 推送的临时链接（multimedia.nt.qq.com.cn），需尽快下载。
+	 * 先尝试不带鉴权直接下载（群消息附件 URL 通常可直接访问），
+	 * 失败则带 access_token 重试。
+	 */
+	async downloadAttachment(url: string): Promise<Buffer> {
+		// 先尝试不带鉴权
+		const res = await this.fetchWithTimeout(url, { method: "GET" });
+		if (res.ok) {
+			return Buffer.from(await res.arrayBuffer());
+		}
+		// 失败则带 access_token 重试
+		const token = await this.getAccessToken();
+		const res2 = await this.fetchWithTimeout(url, {
+			method: "GET",
+			headers: { Authorization: `QQBot ${token}` },
+		});
+		if (!res2.ok) {
+			throw new Error(`downloadAttachment failed: ${res2.status} ${await res2.text()}`);
+		}
+		return Buffer.from(await res2.arrayBuffer());
+	}
+
 	private async sendMessage(scope: ScopeTarget, payload: Record<string, unknown>): Promise<SendOutcome> {
 		// 被动消息必须带 msg_seq（与 msg_id 配合），否则同 msg_id 重复发送会被去重（40054005）。
 		const fullPayload = { ...payload, msg_seq: ++this.msgSeq };

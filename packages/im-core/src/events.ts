@@ -4,6 +4,20 @@ import type { ScopeKey } from "@arkham/chatbot-core";
  * IM 平台归一化后的入站事件。适配器把平台原生事件（如 QQ 的
  * `GROUP_AT_MESSAGE_CREATE`）翻译成此结构，使上层与具体 IM 解耦。
  */
+/** 消息附件（图片/视频/文件），平台中立格式。 */
+export interface ImAttachment {
+	/** 附件下载 URL（临时链接，需尽快下载）。 */
+	readonly url: string;
+	/** 文件名。 */
+	readonly filename: string;
+	/** MIME 类型，如 "image/jpeg"。 */
+	readonly contentType: string;
+	/** 图片宽度（像素）。 */
+	readonly width?: number;
+	/** 图片高度（像素）。 */
+	readonly height?: number;
+}
+
 export interface ImMessageEvent {
 	readonly type: "message";
 	/** 归一化的会话作用域。 */
@@ -18,6 +32,8 @@ export interface ImMessageEvent {
 	readonly mentioned: boolean;
 	/** 平台原生消息 ID（用于被动回复引用）。 */
 	readonly platformMessageId: string;
+	/** 附件列表（用户发的图片等）。 */
+	readonly attachments?: readonly ImAttachment[];
 	/** 平台原始事件载荷（适配器内部用）。 */
 	readonly raw: unknown;
 }

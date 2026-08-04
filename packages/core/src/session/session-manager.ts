@@ -53,6 +53,12 @@ export interface SessionManagerOptions {
 	 * agent 的文字输出不自动发送，只有主动调用 send_message 才发送。
 	 */
 	readonly onSendMessage?: (scope: ScopeKey, text: string, replyToMessageId?: string) => Promise<void>;
+	/**
+	 * 下载附件回调。收到带图片的消息时调用，把附件下载到 scope 的 workspace/inbox/，
+	 * 返回相对于 workspace 的路径（如 "inbox/1234_photo.jpg"）。
+	 * 由 server 注入 adapter.downloadAttachment + 文件写入逻辑。
+	 */
+	readonly onAttachment?: (scope: ScopeKey, attachment: { url: string; filename: string; contentType: string }) => Promise<string>;
 }
 
 interface ActiveEntry {
@@ -72,8 +78,8 @@ interface ActiveEntry {
  * 4. **断电续传**：磁盘上的 memory.md / session.jsonl 让下次激活恢复上下文。
  */
 export class SessionManager {
-	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage">> &
-		Pick<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage">;
+	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage" | "onAttachment">> &
+		Pick<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage" | "onAttachment">;
 	private readonly active = new Map<string, ActiveEntry>();
 	private reaperTimer: ReturnType<typeof setInterval> | undefined;
 	private shuttingDown = false;
@@ -111,7 +117,7 @@ export class SessionManager {
 	 * 因此多条快速连发的群消息，只在首条开 run，后续 steer 进去批量合并，
 	 * 一次 LLM 调用看到所有新消息统一回应——贴近群聊体感。
 	 */
-	async dispatch(message: IncomingMessage): Promise<OutgoingMessage> {
+	async dispatch(message: IncomingMessage & { attachments?: readonly { url: string; filename: string; contentType: string }[] }): Promise<OutgoingMessage> {
 		if (this.shuttingDown) {
 			return { text: "（服务正在关闭，暂时无法处理消息。）" };
 		}
@@ -120,8 +126,23 @@ export class SessionManager {
 		// 刷新回收定时器：有新消息则推迟回收。
 		this.resetReaper(entry);
 
+		// 处理附件：下载图片到 workspace/inbox/，把路径信息拼到 text 里让 agent 知道。
+		let text = message.text;
+		if (message.attachments?.length && this.opts.onAttachment) {
+			const imageAttachments = message.attachments.filter((a) => a.contentType.startsWith("image/"));
+			for (const att of imageAttachments) {
+				try {
+					const relPath = await this.opts.onAttachment(message.scope, att);
+					text += `\n[用户发来一张图片：已保存到 ${relPath}]`;
+				} catch (e) {
+					console.warn(`[session] 下载附件失败: ${(e as Error).message}`);
+					text += `\n[用户发来一张图片，但下载失败]`;
+				}
+			}
+		}
+
 		const result = await entry.session.prompt({
-			text: message.text,
+			text,
 			senderId: message.senderId,
 			senderName: message.senderName,
 			platformMessageId: message.platformMessageId,

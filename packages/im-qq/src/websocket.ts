@@ -18,6 +18,7 @@ import type {
 	GroupAtMessageData,
 	HelloData,
 	InteractionData,
+	MessageAttachment,
 	ReadyData,
 	WsPayload,
 } from "./types.ts";
@@ -48,6 +49,7 @@ export interface QqIncomingMessage {
 	readonly text: string;
 	readonly senderId: string;
 	readonly timestamp: string;
+	readonly attachments?: MessageAttachment[];
 	readonly raw: unknown;
 }
 
@@ -203,6 +205,7 @@ export class QQWebSocketReceiver extends EventEmitter {
 				text: stripAtMention(data.content),
 				senderId: data.author?.member_openid ?? "unknown",
 				timestamp: data.timestamp,
+				attachments: data.attachments,
 				raw: data,
 			} satisfies QqIncomingMessage);
 			return;
@@ -218,6 +221,7 @@ export class QQWebSocketReceiver extends EventEmitter {
 				text: stripAtMention(data.content ?? ""),
 				senderId: data.author?.member_openid ?? userOpenid,
 				timestamp: data.timestamp ?? "",
+				attachments: data.attachments,
 				raw: data,
 			} satisfies QqIncomingMessage);
 			return;

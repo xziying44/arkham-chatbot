@@ -43,13 +43,14 @@ export function createMessageRouter(opts: MessageRouterOptions) {
 			return;
 		}
 		if (event.type !== "message") return;
-		const incoming: IncomingMessage = {
+		const incoming: IncomingMessage & { attachments?: typeof event.attachments } = {
 			scope: event.scope,
 			text: event.text,
 			senderId: event.senderId,
 			senderName: event.senderName,
 			mentioned: event.mentioned,
 			platformMessageId: event.platformMessageId,
+			attachments: event.attachments,
 		};
 
 		// 入站落库（失败仅记日志，不影响处理）。

@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { StreamFn, Skill } from "@earendil-works/pi-agent-core";
@@ -293,6 +293,18 @@ export class BotManager {
 			// send_message 工具：agent 主动调用时发送消息。
 			onSendMessage: async (scope, text, replyToMessageId) => {
 				await adapter.sendText(scope, text, replyToMessageId);
+			},
+			// 附件下载：用户发图片时下载到 scope 的 workspace/inbox/。
+			onAttachment: async (scope, attachment) => {
+				const inboxDir = join(this.botDataDir(config.id), scope.kind, scope.id, "workspace", "inbox");
+				await mkdir(inboxDir, { recursive: true });
+				const ext = attachment.filename.match(/\.[^.]+$/)?.[0] ?? ".jpg";
+				const filename = `${Date.now()}_${attachment.filename.replace(/[^\w.-]/g, "_")}`.slice(0, 60) || `${Date.now()}${ext}`;
+				const filePath = join(inboxDir, filename);
+				const buffer = await adapter.downloadAttachment!(attachment.url);
+				await writeFile(filePath, buffer);
+				console.log(`[bot] 附件已下载 scope=${scope.kind}:${scope.id} → inbox/${filename} (${buffer.length} bytes)`);
+				return `inbox/${filename}`;
 			},
 		});
 		sessions.start();
