@@ -425,14 +425,14 @@ send_image(cards/out/000.png)
 | `language` | string | 所有 | `zh`（中文）、`en`、`zh-CHT` |
 | `victory` | number? | 敌人/地点 | 胜利点数（null=无） |
 | `picture_base64` | string? | 可选 | base64 图片（可带 `data:image/...` 前缀） |
-| `picture_path` | string? | 可选 | 工作目录内图片路径（`@`开头） |
+| `picture_path` | string? | 可选 | 工作目录内图片相对路径（如 `inbox/xxx.jpg`，**不要加 `@` 前缀**） |
 | `weakness_type` | string? | 弱点卡 | class="弱点"时：`弱点`（随机弱点）或 `基础弱点` |
 
 ## 图片处理
 
 - 升级卡（DIY卡）：不需要图片，用固定的模板卡框。
-- 其它卡类型：若需要自定义插画，用 `picture_path`（工作目录内的图片相对路径，以 `@` 开头）。
-- **用户发来的图片**：当用户在群里发图片时，图片会自动下载到工作目录的 `inbox/` 文件夹。消息文本里会标注 `[用户发来一张图片：inbox/xxx.jpg]`。你直接在 .card 里写 `"picture_path": "@inbox/xxx.jpg"` 即可将该图作为卡牌底图。
+- 其它卡类型：若需要自定义插画，用 `picture_path`（工作目录内的图片相对路径，**不要加 `@` 前缀**，直接写 `inbox/xxx.jpg`）。
+- **用户发来的图片**：当用户在群里发图片时，图片会自动下载到工作目录的 `inbox/` 文件夹。消息文本里会标注 `[用户发来一张图片：inbox/xxx.jpg]`。你直接在 .card 里写 `"picture_path": "inbox/xxx.jpg"`（**不加 `@`**）即可将该图作为卡牌底图。
 - **沙箱断网**：你无法下载网上的图片 URL。若用户只给了 URL 没发图，请用户直接在群里发图片。
 
 ## 常见问题

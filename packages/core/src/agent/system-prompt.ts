@@ -104,7 +104,7 @@ export function buildSystemPrompt(options: {
 	lines.push("### 用户发来的图片");
 	lines.push("用户在群里发图片时，图片会**自动下载**到工作目录的 `inbox/` 文件夹，消息文本里会标注 `[用户发来一张图片：inbox/xxx.jpg]`。");
 	lines.push("- 你是**文本模型**，无法「看」图片内容。**不要用 read 工具读图片文件**——读了也只是一堆乱码，浪费上下文。");
-	lines.push("- 但你可以**引用图片路径**：制卡时作为底图，在 .card 里写 `\"picture_path\": \"@inbox/xxx.jpg\"`，arkham-cli 会把这张图渲染到卡牌上。");
+	lines.push("- 但你可以**引用图片路径**：制卡时作为底图，在 .card 里写 `\"picture_path\": \"inbox/xxx.jpg\"`（不要加 @ 前缀），arkham-cli 会把这张图渲染到卡牌上。");
 	lines.push("- 如果用户发图但没说明用途，主动问用户想用这张图做什么（如「用这张图做张支援卡的底图？」）。");
 	lines.push("");
 	lines.push("### 回复方式（重要）");
