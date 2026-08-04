@@ -75,7 +75,13 @@ export class QQWebSocketReceiver extends EventEmitter {
 		if (this.running) return;
 		this.running = true;
 		this.manualClose = false;
-		await this.connect();
+		// 首次连接可能因网络抖动失败（fetch failed），用重连逻辑重试而非直接抛出。
+		try {
+			await this.connect();
+		} catch (error) {
+			console.warn("[qq-ws] 首次连接失败，进入重连流程:", (error as Error).message);
+			await this.reconnect();
+		}
 	}
 
 	async stop(): Promise<void> {
