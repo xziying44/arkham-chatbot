@@ -69,6 +69,8 @@ export class ChatBotSession {
 	 * 由 prompt() 写入、run 结束后读取。
 	 */
 	private triggerMessageId: string | undefined;
+	/** triggerMessageId 的 getter（保留给管理端/日志查看）。 */
+	get triggerMessageIdValue(): string | undefined { return this.triggerMessageId; }
 	private runInFlight: Promise<string> | undefined;
 
 	constructor(opts: BotSessionOptions) {
@@ -170,22 +172,26 @@ export class ChatBotSession {
 			? `[${message.senderId}]: ${message.text}`
 			: message.text;
 
+		// 无论忙闲，都更新 replyToHolder 为最新消息 ID。
+		// 这样 send_message 工具发消息时用的永远是最新的（未过期的）消息 ID。
+		if (this.opts.replyToHolder) this.opts.replyToHolder.current = message.platformMessageId;
+
 		// 忙 → steer 注入，等当前 run 的回复（回复引用触发消息）。
 		if (this.runInFlight) {
 			this.agent.steer({ role: "user", content: formatted, timestamp: Date.now() });
-			return this.runInFlight.then((text) => ({ text, replyToMessageId: this.triggerMessageId }));
+			return this.runInFlight.then((text) => ({ text, replyToMessageId: this.opts.replyToHolder?.current }));
 		}
 
 		// 空闲 → 开新 run。
 		this.triggerMessageId = message.platformMessageId;
-		if (this.opts.replyToHolder) this.opts.replyToHolder.current = message.platformMessageId;
 		this.runInFlight = this.runPrompt(formatted);
 		try {
 			const text = await this.runInFlight;
-			return { text, replyToMessageId: this.triggerMessageId };
+			return { text, replyToMessageId: this.opts.replyToHolder?.current };
 		} finally {
 			this.runInFlight = undefined;
-			if (this.opts.replyToHolder) this.opts.replyToHolder.current = undefined;
+			// 不清除 replyToHolder.current——保留最后一条消息 ID，
+			// 万一 agent 还在收尾发消息时能用到。
 		}
 	}
 
