@@ -112,11 +112,15 @@ export async function startApp(): Promise<AppRuntime> {
 	const messages = new MessageRepository(db);
 
 	// 多机器人编排器。
+	// streamFn 包装：注入 LLM 请求超时（防止推理模型在流式模式下无限挂起）。
+	const LLM_TIMEOUT_MS = 120_000; // 2 分钟，推理模型可能需要较长时间
+	const streamFn = (model: Model<any>, context: any, options?: any) =>
+		models.streamSimple(model, context, { ...options, timeoutMs: LLM_TIMEOUT_MS });
 	const botManager = new BotManager({
 		dataRoot: config.dataDir,
 		model,
 		models,
-		streamFn: models.streamSimple.bind(models),
+		streamFn,
 		sandbox: settings.sandbox,
 		sessionTtlMs: settings.sessionTtlMs,
 		reaperIntervalMs: settings.reaperIntervalMs,
