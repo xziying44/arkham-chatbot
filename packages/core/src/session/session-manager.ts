@@ -122,7 +122,9 @@ export class SessionManager {
 			platformMessageId: message.platformMessageId,
 		});
 		return {
-			text: result.text || "（处理完成，但没有文字回复。）",
+			// agent 通过 send_message 工具发消息时 text 为空——不再重复发。
+			// 只有 agent 没用 send_message 时才返回最终文字由 router 发送。
+			text: result.text,
 			replyToMessageId: result.replyToMessageId,
 		};
 	}
