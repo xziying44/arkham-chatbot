@@ -116,11 +116,17 @@ export async function startApp(): Promise<AppRuntime> {
 	// streamFn 策略：
 	// - OpenAI Chat Completions 端点：用非流式桥接（某些端点流式模式有 bug，
 	//   推理模型只输出 reasoning_content 不输出 content；非流式正常）
-	// - 其它端点（Anthropic 等）：走原始流式 + 2分钟超时
+	// - 其它端点（Anthropic 等）：走原始流式 + 2分钟超时 + 5次重试
 	const LLM_TIMEOUT_MS = 120_000;
+	const LLM_MAX_RETRIES = 5;
 	const nonStreamFn = createNonStreamStreamFn(
 		(model: Model<any>, context: any, options?: any) =>
-			models.streamSimple(model, context, { ...options, timeoutMs: LLM_TIMEOUT_MS }),
+			models.streamSimple(model, context, {
+				...options,
+				timeoutMs: LLM_TIMEOUT_MS,
+				maxRetries: LLM_MAX_RETRIES,
+				maxRetryDelayMs: 8_000,
+			}),
 	);
 	const botManager = new BotManager({
 		dataRoot: config.dataDir,

@@ -181,11 +181,11 @@ export class ChatBotSession {
 		try {
 			await this.agent.prompt(formattedText);
 		} catch (error) {
-			// LLM 请求失败（API 500/超时等）：把错误信息作为回复返回给用户，
-			// 而非静默吞掉导致"处理完成但没有文字回复"。
+			// LLM 请求失败（API 500/超时等，pi-ai 内部已重试 maxRetries 次仍失败）：
+			// 回复友好的错误提示给用户。
 			const errMsg = error instanceof Error ? error.message : String(error);
 			console.error(`[bot] agent.prompt 失败: ${errMsg}`);
-			return `（抱歉，处理时遇到了问题：${errMsg.slice(0, 100)}。请稍后重试。）`;
+			return "服务器开小差了，请稍后再试。";
 		} finally {
 			unsubscribe();
 		}
