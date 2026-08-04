@@ -278,6 +278,10 @@ export class BotManager {
 					},
 				}),
 			],
+			// 中间消息：agent 在工具调用之间输出的文字立即发送，像真人边想边说。
+			onIntermediateText: (scope, text, replyToMessageId) => {
+				void adapter.sendText(scope, text, replyToMessageId).catch(() => {});
+			},
 		});
 		sessions.start();
 

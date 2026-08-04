@@ -36,6 +36,12 @@ export interface BotSessionOptions {
 	 * 由 SessionManager 创建，与 extraToolsFactory 共享同一引用。
 	 */
 	readonly replyToHolder?: { current?: string };
+	/**
+	 * 中间消息回调：当 agent 在工具调用之间输出了文字（如"让我查一下…""做好了"），
+	 * 立即通过此回调发送，而不是攒到最后。让对话更像真人——边想边说。
+	 * 最终回复仍然由 prompt() 返回值发送（router 负责）。
+	 */
+	readonly onIntermediateText?: (text: string) => void;
 }
 
 export class ChatBotSession {
@@ -170,7 +176,7 @@ export class ChatBotSession {
 
 	/** 实际跑一次 agent.prompt，收集 assistant 文本。 */
 	private async runPrompt(formattedText: string): Promise<string> {
-		const collector = new AssistantTextCollector();
+		const collector = new AssistantTextCollector(this.opts.onIntermediateText);
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
 		try {
 			await this.agent.prompt(formattedText);
@@ -284,11 +290,24 @@ export class ChatBotSession {
  * 注意：pi 的事件流里，message_update 携带当前 partial；我们只在 message_end
  * （assistant 消息完成）时把该条消息的完整文本追加，避免拼接流式增量造成重复。
  */
+/**
+ * 收集 agent 的 assistant 文本，并在工具调用之间产生中间文字时立即回调发送。
+ *
+ * Agent loop 每轮 LLM 调用结束会 emit message_end（带完整 assistant message）。
+ * 如果这轮的 stopReason 是 "toolUse"（后面还有工具执行+更多轮），且 assistant
+ * 输出了文字，这文字就是"中间消息"——应该立即发给用户，而不是攒到最后。
+ * 最后一轮（stopReason="stop"）的文字由 prompt() 返回值发送。
+ */
 class AssistantTextCollector {
-	private parts: string[] = [];
+	private finalParts: string[] = [];
+
+	constructor(private readonly onIntermediateText?: (text: string) => void) {}
 
 	onEvent = (event: unknown): void => {
-		const e = event as { type: string; message?: { role?: string; content?: unknown } };
+		const e = event as {
+			type: string;
+			message?: { role?: string; content?: unknown; stopReason?: string };
+		};
 		if (e.type !== "message_end") return;
 		const message = e.message;
 		if (!message || message.role !== "assistant") return;
@@ -297,11 +316,20 @@ class AssistantTextCollector {
 		const chunk = content
 			.filter((c): c is { type: "text"; text: string } => typeof c === "object" && c !== null && (c as { type: string }).type === "text")
 			.map((c) => c.text)
-			.join("");
-		if (chunk.length > 0) this.parts.push(chunk);
+			.join("")
+			.trim();
+		if (!chunk) return;
+
+		// 如果这轮以 toolUse 结束（后面还有工具要执行），文字是中间消息，立即发送。
+		if (message.stopReason === "toolUse" && this.onIntermediateText) {
+			this.onIntermediateText(chunk);
+		} else {
+			// 最后一轮（stop/length）的文字作为最终回复返回。
+			this.finalParts.push(chunk);
+		}
 	};
 
 	get text(): string {
-		return this.parts.join("").trim();
+		return this.finalParts.join("").trim();
 	}
 }

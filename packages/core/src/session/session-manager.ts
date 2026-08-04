@@ -40,6 +40,11 @@ export interface SessionManagerOptions {
 		getReplyToMsgId: () => string | undefined,
 		workspaceDir: string,
 	) => AgentTool[];
+	/**
+	 * 中间消息发送回调。当 agent 在工具调用之间输出了文字时调用，
+	 * 让消息实时发送而非攒到最后。由 router 注入 adapter.sendText。
+	 */
+	readonly onIntermediateText?: (scope: ScopeKey, text: string, replyToMessageId?: string) => void;
 }
 
 interface ActiveEntry {
@@ -57,8 +62,8 @@ interface ActiveEntry {
  * 4. **断电续传**：磁盘上的 memory.md / session.jsonl 让下次激活恢复上下文。
  */
 export class SessionManager {
-	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory">> &
-		Pick<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory">;
+	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText">> &
+		Pick<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText">;
 	private readonly active = new Map<string, ActiveEntry>();
 	private reaperTimer: ReturnType<typeof setInterval> | undefined;
 	private shuttingDown = false;
@@ -76,6 +81,7 @@ export class SessionManager {
 			persona: opts.persona,
 			skills: opts.skills,
 			extraToolsFactory: opts.extraToolsFactory,
+			onIntermediateText: opts.onIntermediateText,
 		};
 	}
 
@@ -152,6 +158,9 @@ export class SessionManager {
 			skills: this.opts.skills,
 			extraTools,
 			replyToHolder,
+			onIntermediateText: this.opts.onIntermediateText
+				? (text: string) => this.opts.onIntermediateText!(scope, text, replyToHolder.current)
+				: undefined,
 		});
 		await session.activate();
 
