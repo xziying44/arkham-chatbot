@@ -57,7 +57,7 @@ async function main(): Promise<void> {
 		model: model as Model<any>,
 		models,
 		streamFn: models.streamSimple.bind(models),
-		envFactory: (_scope, workspaceDir) =>
+		envFactory: async (_scope, workspaceDir) =>
 			createExecutionEnv({ enabled: false, cwd: workspaceDir, networkDisabled: false }),
 		ttlMs: 3_600_000,
 	});

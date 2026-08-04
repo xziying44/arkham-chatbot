@@ -17,6 +17,8 @@ export interface BotManagerLike {
 	getScopeDir(botId: string, kind: "group" | "user", scopeId: string): string | undefined;
 	/** 列出某 bot 在磁盘上的所有 scope（扫描 group/ + user/ 目录）。 */
 	listScopes(botId: string): Promise<{ kind: "group" | "user"; id: string }[]>;
+	/** 技能源文件目录（管理端查看技能用）。 */
+	readonly skillsDir: string;
 }
 
 /** 磁盘上扫出的 scope 信息。 */

@@ -117,6 +117,9 @@ export async function startApp(): Promise<AppRuntime> {
 		sessionTtlMs: settings.sessionTtlMs,
 		reaperIntervalMs: settings.reaperIntervalMs,
 		messages,
+		skillsDir: config.skillsDir,
+		arkhamBinPath: config.arkhamBinPath,
+		arkhamAssetsDir: config.arkhamAssetsDir,
 		logger: appLog,
 	});
 

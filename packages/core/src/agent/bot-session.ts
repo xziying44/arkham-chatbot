@@ -1,4 +1,4 @@
-import { type AgentMessage, type AgentTool, Agent, type StreamFn } from "@earendil-works/pi-agent-core";
+import { type AgentMessage, type AgentTool, type Skill, formatSkillsForSystemPrompt, Agent, type StreamFn } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
@@ -29,6 +29,8 @@ export interface BotSessionOptions {
 	readonly persona?: string;
 	/** 额外的自定义工具（在默认 bash/read/edit/write 之上）。 */
 	readonly extraTools?: AgentTool[];
+	/** 已加载的技能清单（filePath 已重写为沙箱内路径）。所有 scope 共享。 */
+	readonly skills?: Skill[];
 	/**
 	 * 共享的"当前被动消息 id"容器：prompt 时写入，工具执行期间读取。
 	 * 由 SessionManager 创建，与 extraToolsFactory 共享同一引用。
@@ -85,6 +87,7 @@ export class ChatBotSession {
 			memory: sessionSummary,
 			memoryIndex,
 			recentMessageCount: previousMessages.length,
+			skillsBlock: this.opts.skills?.length ? formatSkillsForSystemPrompt(this.opts.skills) : "",
 			tools: this.tools,
 		});
 		this.systemPromptCache = systemPrompt;

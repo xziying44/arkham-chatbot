@@ -115,4 +115,8 @@ export const api = {
     request<{ ok: true; changed: number; note?: string }>("/api/settings", { method: "PATCH", body: JSON.stringify(data) }),
   reapAll: () => request<{ ok: true; reaped: number }>("/api/settings/reap-all", { method: "POST" }),
   getPrompts: () => request<import("./types").PromptPreview>("/api/settings/prompts"),
+
+  // skills（只读查看）
+  listSkills: () => request<{ items: import("./types").SkillSummary[] }>("/api/skills"),
+  getSkill: (name: string) => request<import("./types").SkillDetail>(`/api/skills/${name}`),
 };

@@ -16,6 +16,7 @@ import Logs from "./pages/Logs";
 import Settings from "./pages/Settings";
 import Prompts from "./pages/Prompts";
 import Memories from "./pages/Memories";
+import Skills from "./pages/Skills";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -39,6 +40,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="messages" element={<Messages />} />
               <Route path="logs" element={<Logs />} />
               <Route path="memories" element={<Memories />} />
+              <Route path="skills" element={<Skills />} />
               <Route path="prompts" element={<Prompts />} />
               <Route path="settings" element={<Settings />} />
             </Route>

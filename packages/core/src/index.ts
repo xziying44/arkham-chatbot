@@ -7,6 +7,7 @@ export { buildSystemPrompt } from "./agent/system-prompt.ts";
 export { createDefaultTools, wrapHarnessTool, wrapHarnessTools } from "./tools/index.ts";
 export { createSendImageTool } from "./tools/send-image.ts";
 export type { CreateSendImageToolOptions, ImageSender, SendImageInput } from "./tools/send-image.ts";
+export { loadSkillsFromDir, SANDBOX_SKILLS_DIR } from "./skills/skill-loader.ts";
 export { SessionManager } from "./session/session-manager.ts";
 export type { SessionManagerOptions, ActiveScopeInfo, ActiveScopeDetail } from "./session/session-manager.ts";
 export { HistoryStore } from "./session/history.ts";

@@ -29,9 +29,11 @@ export function buildSystemPrompt(options: {
 	memoryIndex?: string;
 	/** 激活时加载的历史消息数（让 agent 知道有多少上下文在内存里）。 */
 	recentMessageCount?: number;
+	/** formatSkillsForSystemPrompt 的输出（已格式化好的技能清单 XML 块）。空则不输出技能段。 */
+	skillsBlock?: string;
 	tools: AgentTool[];
 }): string {
-	const { scopeName, scopeKind, persona, memory, memoryIndex, recentMessageCount } = options;
+	const { scopeName, scopeKind, persona, memory, memoryIndex, recentMessageCount, skillsBlock } = options;
 	const isGroup = scopeKind === "group";
 
 	const lines: string[] = [];
@@ -150,6 +152,15 @@ export function buildSystemPrompt(options: {
 		}
 		lines.push("- **不该记**：一次性问答、能从代码/文件推出的信息、本会话的临时上下文。");
 	lines.push("- 信息变化时更新对应记忆文件、过时时删除并同步索引。索引的钩子要一句话说清「这是什么、何时会用到」——这是下次启动时你第一时间看到的东西。");
+
+	// ---- 技能区（仅当有已加载技能时输出）----
+	if (skillsBlock && skillsBlock.trim()) {
+		lines.push("");
+		lines.push("## 技能（Skills）");
+		lines.push(skillsBlock);
+		lines.push("");
+		lines.push("当用户的请求匹配某个技能的描述时，**先用 read 工具读取该技能的完整说明**（即上面 `<location>` 指向的 SKILL.md 路径），再按里面的步骤执行。技能文件里引用的相对路径（如其它 .md 参考），相对于该技能所在目录（SKILL.md 的父目录）解析——用 read 工具读那些路径即可。");
+	}
 
 	return lines.join("\n");
 }

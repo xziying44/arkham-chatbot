@@ -1,4 +1,4 @@
-import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, AgentTool, Skill } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
@@ -20,13 +20,15 @@ export interface SessionManagerOptions {
 	/** 流式调用函数，通常为 `models.streamSimple.bind(models)`。 */
 	readonly streamFn: StreamFn;
 	/** 为每个 scope 创建沙箱执行环境（注入 cwd）。 */
-	readonly envFactory: (scope: ScopeKey, workspaceDir: string, scopeDir: string) => ExecutionEnv;
+	readonly envFactory: (scope: ScopeKey, workspaceDir: string, scopeDir: string) => ExecutionEnv | Promise<ExecutionEnv>;
 	/** 无活动回收阈值（毫秒），默认 1 小时。 */
 	readonly ttlMs?: number;
 	/** 回收器扫描间隔（毫秒），默认 1 分钟。 */
 	readonly reaperIntervalMs?: number;
 	/** 机器人人设（所有 scope 共享）。 */
 	readonly persona?: string;
+	/** 已加载的技能清单（所有 scope 共享，filePath 已重写为沙箱内路径）。 */
+	readonly skills?: Skill[];
 	/**
 	 * 按 scope 生成额外工具（如 send_image）。每个 scope 激活时调用一次，
 	 * 返回的工具会与默认 bash/read/edit/write 一起装入 Agent。
@@ -55,8 +57,8 @@ interface ActiveEntry {
  * 4. **断电续传**：磁盘上的 memory.md / session.jsonl 让下次激活恢复上下文。
  */
 export class SessionManager {
-	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory">> &
-		Pick<SessionManagerOptions, "persona" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory">;
+	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory">> &
+		Pick<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory">;
 	private readonly active = new Map<string, ActiveEntry>();
 	private reaperTimer: ReturnType<typeof setInterval> | undefined;
 	private shuttingDown = false;
@@ -72,6 +74,7 @@ export class SessionManager {
 			ttlMs,
 			reaperIntervalMs: opts.reaperIntervalMs ?? 60_000,
 			persona: opts.persona,
+			skills: opts.skills,
 			extraToolsFactory: opts.extraToolsFactory,
 		};
 	}
@@ -133,7 +136,7 @@ export class SessionManager {
 
 		const scopeDir = `${this.opts.dataDir}/${scope.kind}/${scope.id}`;
 		const workspaceDir = `${scopeDir}/workspace`;
-		const env = this.opts.envFactory(scope, workspaceDir, scopeDir);
+		const env = await this.opts.envFactory(scope, workspaceDir, scopeDir);
 		// 共享 holder：factory 创建的工具读它，ChatBotSession.prompt 写它。
 		// 让 send_image 等工具能拿到当前被动消息 id（群消息发图必须带 msg_id）。
 		const replyToHolder: { current?: string } = {};
@@ -146,6 +149,7 @@ export class SessionManager {
 			streamFn: this.opts.streamFn,
 			env,
 			persona: this.opts.persona,
+			skills: this.opts.skills,
 			extraTools,
 			replyToHolder,
 		});

@@ -21,6 +21,12 @@ export interface AppConfig {
 	readonly sandbox: { enabled: boolean; networkDisabled: boolean; timeoutSeconds: number };
 	/** 运行时数据根目录（机器人工作区、session.jsonl、memory.md）。 */
 	readonly dataDir: string;
+	/** 技能源文件目录（SKILL.md 所在目录），启动时加载注入所有会话。 */
+	readonly skillsDir: string;
+	/** arkham-workshop CLI 二进制路径（DIY卡图技能用）。可选。 */
+	readonly arkhamBinPath?: string;
+	/** arkham-workshop 资产目录（字体/图片/cardback）。可选。 */
+	readonly arkhamAssetsDir?: string;
 	/** 引导用的默认 persona（仅首次种库用）。 */
 	readonly persona?: string;
 	/** SQLite 数据库文件路径（机器人账号/设置/消息/日志）。 */
@@ -61,7 +67,15 @@ function bool(name: string, fallback: boolean): boolean {
 /** 从 process.env 读取并校验配置。 */
 export function loadConfig(): AppConfig {
 	const dataDir = resolve(process.env.CHATBOT_DATA_DIR ?? "./data");
+	const skillsDir = resolve(process.env.SKILLS_DIR ?? "./skills");
+	// arkham-workshop 相关路径：默认从 ARKHAM_WORKSHOP_DIR 推导，或单独指定。
+	const arkhamWorkshopDir = optional("ARKHAM_WORKSHOP_DIR");
 	return {
+		skillsDir,
+		arkhamBinPath: optional("ARKHAM_CLI_PATH")
+			?? (arkhamWorkshopDir ? resolve(arkhamWorkshopDir, "target/release/arkham-cli") : undefined),
+		arkhamAssetsDir: optional("ARKHAM_ASSETS_DIR")
+			?? (arkhamWorkshopDir ? resolve(arkhamWorkshopDir, "assets") : undefined),
 		qq: {
 			appId: optional("QQ_APP_ID") ?? "",
 			appSecret: optional("QQ_APP_SECRET") ?? "",

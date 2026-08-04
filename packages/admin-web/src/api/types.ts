@@ -87,3 +87,20 @@ export interface PromptPreview {
   template: string;
   tools: { name: string; description: string }[];
 }
+
+export interface SkillSummary {
+  name: string;
+  description: string;
+  dir: string;
+  files: string[];
+}
+
+export interface SkillDetail {
+  name: string;
+  description: string;
+  dir: string;
+  filePath: string;
+  content: string;
+  body: string;
+  attachments: { path: string; content: string }[];
+}

@@ -2,6 +2,8 @@ import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { BwrapExecutionEnv } from "./bwrap-execution-env.ts";
 import { GuardedExecutionEnv } from "./guarded-execution-env.ts";
+import { mkdir, lstat, symlink } from "node:fs/promises";
+import { dirname } from "node:path";
 
 /**
  * 沙箱执行环境的工厂配置。
@@ -18,9 +20,12 @@ export interface EnvFactoryOptions {
 	/** shell 路径（可选）。 */
 	readonly shellPath?: string;
 	/**
-	 * 额外只读挂载（host 路径 → 沙箱内路径）。用于把历史归档等目录
+	 * 额外只读挂载（host 路径 → 沙箱内路径）。用于把历史归档/技能目录/二进制等
 	 * 只读挂载到沙箱内，让 agent 能 read 查阅但无法篡改。
-	 * 生产 bwrap 用 --ro-bind；开发回退（NodeExecutionEnv）忽略（文件本就在宿主同路径）。
+	 * - 生产 bwrap：用 `--ro-bind host container`（host 可是目录或单文件）。
+	 * - 开发回退（NodeExecutionEnv，无 bwrap）：为每个 bind 建 symlink
+	 *   container → host（若 container 是相对路径则基于 cwd 解析）。让开发模式下
+	 *   agent 也能用同样的路径读到挂载内容。
 	 */
 	readonly readOnlyBinds?: readonly (readonly [string, string])[];
 }
@@ -34,16 +39,60 @@ export interface EnvFactoryOptions {
  * （curl/wget 外发、ifconfig/hostname 探测、读 ~/.ssh 凭证、读 API key 环境变量等）。
  * 这是纵深防御的一层——开发环境无 bwrap 时它仍是硬护栏；生产环境与断网/只读根配合。
  */
-export function createExecutionEnv(options: EnvFactoryOptions): ExecutionEnv {
+export async function createExecutionEnv(options: EnvFactoryOptions): Promise<ExecutionEnv> {
 	const useBwrap = options.enabled && process.platform === "linux";
-	const base: ExecutionEnv = useBwrap
-		? new BwrapExecutionEnv({
-				cwd: options.cwd,
-				workspace: options.cwd,
-				networkDisabled: options.networkDisabled ?? true,
-				shellPath: options.shellPath,
-				readOnlyBinds: options.readOnlyBinds,
-			})
-		: new NodeExecutionEnv({ cwd: options.cwd, shellPath: options.shellPath });
+	if (useBwrap) {
+		const base: ExecutionEnv = new BwrapExecutionEnv({
+			cwd: options.cwd,
+			workspace: options.cwd,
+			networkDisabled: options.networkDisabled ?? true,
+			shellPath: options.shellPath,
+			readOnlyBinds: options.readOnlyBinds,
+		});
+		return new GuardedExecutionEnv(base);
+	}
+	// 开发模式（macOS / disabled）：NodeExecutionEnv 不认 readOnlyBinds。
+	// 为每个 bind 建 symlink，让 agent 用同样的沙箱内路径也能读到宿主内容。
+	await ensureDevSymlinks(options.cwd, options.readOnlyBinds ?? []);
+	const base: ExecutionEnv = new NodeExecutionEnv({ cwd: options.cwd, shellPath: options.shellPath });
 	return new GuardedExecutionEnv(base);
+}
+
+/**
+ * 开发模式下为 readOnlyBinds 建 symlink。
+ * container 路径若是相对路径，基于 cwd 解析；若是绝对路径（如 /opt/arkham/...），
+ * 尝试在宿主创建（可能因权限失败，仅 warn 不阻断——agent 执行时才报错）。
+ * 已存在的 symlink/文件跳过（不覆盖），保证幂等。
+ */
+async function ensureDevSymlinks(
+	cwd: string,
+	binds: readonly (readonly [string, string])[],
+): Promise<void> {
+	for (const [host, container] of binds) {
+		const containerAbs = container.startsWith("/")
+			? container
+			: `${cwd.replace(/\/+$/, "")}/${container.replace(/^\/+/, "")}`;
+		await safeSymlink(host, containerAbs);
+	}
+}
+
+/** 建 symlink，已存在则跳过；失败仅 warn（不阻断启动）。幂等。 */
+async function safeSymlink(host: string, container: string): Promise<void> {
+	try {
+		await lstat(container);
+		return; // 已存在（文件/symlink/目录），不覆盖。
+	} catch {
+		// 不存在，继续建。
+	}
+	try {
+		await mkdir(dirname(container), { recursive: true });
+		await symlink(host, container);
+	} catch (error) {
+		const msg = (error as NodeJS.ErrnoException).code === "EEXIST"
+			? null
+			: (error as Error).message;
+		if (msg) {
+			console.warn(`[sandbox] 开发 symlink 创建失败: ${container} → ${host} (${msg})`);
+		}
+	}
 }

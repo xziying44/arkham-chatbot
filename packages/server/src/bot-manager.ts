@@ -1,11 +1,12 @@
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Model, Models } from "@earendil-works/pi-ai";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn, Skill } from "@earendil-works/pi-agent-core";
 import {
 	SessionManager,
 	createSendImageTool,
 	createLogger,
+	loadSkillsFromDir,
 	type Logger,
 	type ScopeKey,
 	type IncomingMessage,
@@ -36,6 +37,12 @@ export interface BotManagerOptions {
 	readonly reaperIntervalMs: number;
 	/** 消息流水仓库（路由器入站/出站落库用）。可选。 */
 	readonly messages?: MessageRepository;
+	/** 技能源文件目录（宿主机绝对路径）。启动时加载，注入所有会话。 */
+	readonly skillsDir: string;
+	/** arkham-cli 二进制路径（宿主机）。技能 diy-card 用它渲染卡图。可选。 */
+	readonly arkhamBinPath?: string;
+	/** arkham-cli 资产目录（宿主机绝对路径）。可选。 */
+	readonly arkhamAssetsDir?: string;
 	readonly logger?: Logger;
 }
 
@@ -62,14 +69,32 @@ export class BotManager {
 	private readonly instances = new Map<string, BotInstance>();
 	private readonly log: Logger;
 	private readonly opts: BotManagerOptions;
+	/** 启动时从 skillsDir 加载的技能清单（所有会话共享）。 */
+	private skills: Skill[] = [];
 
 	constructor(opts: BotManagerOptions) {
 		this.opts = opts;
 		this.log = opts.logger ?? createLogger("bot-manager");
 	}
 
-	/** 启动：为每个 enabled 的配置构建并连接实例。失败的机器人记日志、跳过，不阻塞其它。 */
+	/** 启动：加载技能 → 为每个 enabled 的配置构建并连接实例。失败的机器人记日志、跳过，不阻塞其它。 */
 	async start(configs: BotConfig[]): Promise<void> {
+		// 加载技能（所有会话共享）。目录不存在或无技能文件不报错，只是没有技能可用。
+		try {
+			const { skills, diagnostics } = await loadSkillsFromDir(this.opts.skillsDir);
+			this.skills = skills;
+			if (skills.length > 0) {
+				this.log.info("技能已加载", {
+					count: skills.length,
+					names: skills.map((s) => s.name).join(", "),
+				});
+			}
+			for (const d of diagnostics) {
+				this.log.warn("技能加载警告", { code: d.code, path: d.path, message: d.message });
+			}
+		} catch (error) {
+			this.log.warn("技能目录加载失败，技能不可用", { dir: this.opts.skillsDir, error: (error as Error).message });
+		}
 		for (const cfg of configs) {
 			if (!cfg.enabled) {
 				this.log.info("机器人未启用，跳过启动", { botId: cfg.id, name: cfg.name });
@@ -81,6 +106,11 @@ export class BotManager {
 				this.log.error("机器人启动失败", { botId: cfg.id, name: cfg.name, error: (error as Error).message });
 			}
 		}
+	}
+
+	/** 技能源文件目录（管理端查看技能用）。 */
+	get skillsDir(): string {
+		return this.opts.skillsDir;
 	}
 
 	/** 列出所有已加载实例的运行时信息（管理端列表用）。 */
@@ -213,18 +243,30 @@ export class BotManager {
 			model: this.opts.model,
 			models: this.opts.models,
 			streamFn: this.opts.streamFn,
-			envFactory: (_scope, workspaceDir, scopeDir) =>
+			envFactory: async (_scope, workspaceDir, scopeDir) =>
 				createExecutionEnv({
 					enabled: this.opts.sandbox.enabled,
 					cwd: workspaceDir,
 					networkDisabled: this.opts.sandbox.networkDisabled,
 					timeoutSeconds: this.opts.sandbox.timeoutSeconds,
-					// 历史归档只读挂载到沙箱内 workspace/history/，agent 可查阅但无法篡改。
-					readOnlyBinds: [[`${scopeDir}/history`, `${workspaceDir}/history`]],
+					// 只读挂载（host → 沙箱内 workspace 下固定路径）：
+					// - 历史归档 → workspace/history/（agent 可查阅但无法篡改）
+					// - 技能源目录 → workspace/skills/（agent 用 read 读 SKILL.md + 附件）
+					// - arkham-cli 资产 → workspace/.arkham/assets（DIY 卡图技能用）
+					// - arkham-cli 二进制 → workspace/.arkham/bin/arkham-cli（单文件 ro-bind）
+					// 用 workspace 下的相对路径而非 /opt/arkham/，避免 macOS 开发模式下
+					// /opt 不可写的权限问题。bwrap 的 --ro-bind 支持嵌套在 rw workspace 内。
+					readOnlyBinds: [
+						[`${scopeDir}/history`, `${workspaceDir}/history`],
+						[this.opts.skillsDir, `${workspaceDir}/skills`],
+						...(this.opts.arkhamAssetsDir ? [[this.opts.arkhamAssetsDir, `${workspaceDir}/.arkham/assets`] as const] : []),
+						...(this.opts.arkhamBinPath ? [[this.opts.arkhamBinPath, `${workspaceDir}/.arkham/bin/arkham-cli`] as const] : []),
+					],
 				}),
 			ttlMs: this.opts.sessionTtlMs,
 			reaperIntervalMs: this.opts.reaperIntervalMs,
 			persona: config.persona ?? undefined,
+			skills: this.skills,
 			extraToolsFactory: (scope, getReplyToMsgId, workspaceDir) => [
 				createSendImageTool({
 					scopeId: scope.id,
