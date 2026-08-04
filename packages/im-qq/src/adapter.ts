@@ -144,7 +144,17 @@ export class QQAdapter implements ImAdapter {
 		try {
 			await this.client.sendKeyboard(target, content, keyboard, replyToMessageId);
 		} catch (kbError) {
-			console.warn("[qq-adapter] keyboard 发送失败，降级纯文本:", (kbError as Error).message);
+			const err = kbError as Error;
+			console.warn(`[qq-adapter] keyboard 发送失败 scope=${scope.kind}:${scope.id} name=${err.name} msg=${err.message} cause=${err.cause ?? "无"}`);
+			// 群消息 msg_id 过期（11244）→ 去掉 msg_id 重试（发主动消息）
+			if (err.message.includes("11244") || err.message.includes("token not exist")) {
+				try {
+					await this.client.sendKeyboard(target, content, keyboard, undefined);
+					return;
+				} catch (retryErr) {
+					console.warn("[qq-adapter] keyboard 去 msg_id 重试也失败:", (retryErr as Error).message);
+				}
+			}
 			// 降级为纯文本（把选项列出来，至少文字能到）
 			const fallback = content + "\n（按钮不可用）";
 			try {

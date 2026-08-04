@@ -281,6 +281,7 @@ export class BotManager {
 				createAskUserTool({
 					getReplyToMsgId,
 					pendingAskHolder,
+					scopeKind: scope.kind,
 					sendKeyboard: async (content, keyboard, replyToMsgId) => {
 						await adapter.sendKeyboard?.(scope, content, keyboard, replyToMsgId);
 					},

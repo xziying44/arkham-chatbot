@@ -182,7 +182,17 @@ export function buildSystemPrompt(options: {
 		lines.push("## 技能（Skills）");
 		lines.push(skillsBlock);
 		lines.push("");
-		lines.push("当用户的请求匹配某个技能的描述时，**先用 read 工具读取该技能的完整说明**（即上面 `<location>` 指向的 SKILL.md 路径），再按里面的步骤执行。技能文件里引用的相对路径（如其它 .md 参考），相对于该技能所在目录（SKILL.md 的父目录）解析——用 read 工具读那些路径即可。");
+		lines.push("当任务匹配某技能的描述时，**调用 `load_skill` 工具**加载该技能的完整说明。");
+		lines.push("load_skill 会返回 SKILL.md 全文 + 目录下的参考文件清单。SKILL.md 是路由器——它会指引你：");
+		lines.push("- 用 read 读 **references/** 下的详细参考文件（字段模板、标签规范等）");
+		lines.push("- 用 bash 跑 **scripts/** 下的脚本（如数值校验）");
+		lines.push("- 调 load_skill 加载**其它技能**配合（如制卡时加载数值模型技能）");
+		lines.push("");
+		lines.push("**严格按 SKILL.md 的工作流步骤执行**，包括它要求你读的参考文件和运行的脚本。不要跳过凭记忆干活。");
+		lines.push("");
+		lines.push("### 技能配合（重要）");
+		lines.push("- **制卡（diy-card）时自由设计数值** → 必须 load_skill(\"arkham-card-numbers\") 配平数值 + 跑 `python3 skills/arkham-card-numbers/scripts/balance_check.py` 校验");
+		lines.push("- **用户用大白话描述卡牌效果** → load_skill(\"card-text-lint\") 校准为规范语法");
 	}
 
 	return lines.join("\n");

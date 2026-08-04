@@ -66,6 +66,11 @@ export interface CreateAskUserToolOptions {
 	readonly pendingAskHolder: PendingAskHolder;
 	/** 超时时间（毫秒），默认 5 分钟。 */
 	readonly timeoutMs?: number;
+	/**
+	 * 会话类型：群聊用回调按钮（type=1，enter 在群聊不可用），
+	 * 私聊用指令按钮（type=2 + enter=true，点击自动发送）。
+	 */
+	readonly scopeKind: "group" | "user";
 }
 
 /**
@@ -97,10 +102,12 @@ export function createAskUserTool(opts: CreateAskUserToolOptions): AgentTool<typ
 			}
 
 			// 构造 keyboard：每个 option 一个指令按钮（type=2），每个按钮单独占一行。
-			// 指令按钮点击后自动发送 @机器人 + data 作为用户消息（enter=true 自动发送）。
-			// 这样用户的选择会出现在聊天记录里（历史可见），且走正常消息入站流程，
-			// 由 prompt 的 steer 拦截 resolve pending ask（不需要 INTERACTION_CREATE 事件）。
+			// 指令按钮点击后将选项填充到输入框（@机器人 + data）。
+			// - 私聊：enter=true，点击后自动发送
+			// - 群聊：enter 在群聊不可用（QQ 限制），点击后填充到输入框，用户手动点发送
+			// 无论哪种方式，选择都会作为用户消息入站，走 prompt 拦截 resolve pending ask。
 			// 每行一个按钮（而非一行多列），保证按钮文字完整显示不被挤压。
+			const isGroup = opts.scopeKind === "group";
 			const keyboard = {
 				content: {
 					rows: options.map((opt, i) => ({
@@ -113,10 +120,10 @@ export function createAskUserTool(opts: CreateAskUserToolOptions): AgentTool<typ
 									style: (i === 0 ? 1 : 0) as 0 | 1,
 								},
 								action: {
-									type: 2 as const, // 指令按钮：点击自动发送 @bot + data
+									type: 2 as const, // 指令按钮：点击填充 @bot + data 到输入框
 									permission: { type: 2 as const },
 									data: opt.label,
-									enter: true, // 点击后自动发送（不需用户手动点发送键）
+									...(isGroup ? {} : { enter: true }), // 私聊自动发送，群聊手动发送
 								},
 							},
 						],

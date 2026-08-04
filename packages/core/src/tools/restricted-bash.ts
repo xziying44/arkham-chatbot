@@ -45,6 +45,15 @@ const ALLOWED_COMMANDS = new Set([
 ]);
 
 /**
+ * 允许的 python 脚本白名单（只读型校验脚本，不执行任意代码）。
+ * 匹配规则：命令形如 `python3 <path>` 且 path 的 basename 在此集合中。
+ * 这些脚本只读输入 JSON 输出校验结果，不做文件写入/网络/系统操作。
+ */
+const ALLOWED_PYTHON_SCRIPTS = new Set([
+	"balance_check.py", // arkham-card-numbers 技能的数值校验脚本
+]);
+
+/**
  * 禁止的命令模式（即使白名单里有，也额外拦截危险用法）。
  * 只拦真正危险的：脚本执行、网络、系统探测。
  * 文件删除/移动在沙箱内是安全的（只影响工作目录），不拦截。
@@ -111,7 +120,29 @@ export function reviewBashCommand(command: string): { allowed: boolean; reason?:
 	const normalized = command.trim();
 	if (!normalized) return { allowed: false, reason: "空命令" };
 
-	// 1. 先检查禁止模式（优先级最高）
+	// 0. 先检查是否是允许的 python 脚本调用（在 FORBIDDEN_PATTERNS 之前）
+	// 形如 `python3 skills/.../balance_check.py '{"..."}' ` 或 `python3 .../balance_check.py < file.json`
+	const pythonScriptMatch = normalized.match(/\bpython\d?\s+(\S+)/);
+	if (pythonScriptMatch) {
+		const scriptPath = pythonScriptMatch[1];
+		const scriptName = scriptPath.split("/").pop() ?? scriptPath;
+		if (ALLOWED_PYTHON_SCRIPTS.has(scriptName)) {
+			// 是白名单脚本——但还要确认命令里没有其它危险操作（管道到别的命令等）
+			// 只允许 python3 <script> [args]，不允许 python3 <script> | 其它命令
+			// 简单检查：分割后的子命令只有 python3 一条（或 python3 + 文件重定向）
+			const subCommands = extractCommands(normalized);
+			const nonPython = subCommands.filter((c) => !c.startsWith("python"));
+			if (nonPython.length === 0) {
+				return { allowed: true };
+			}
+			return {
+				allowed: false,
+				reason: `白名单 python 脚本不允许与其它命令组合使用（发现: ${nonPython.join(", ")}）。`,
+			};
+		}
+	}
+
+	// 1. 检查禁止模式（优先级最高）
 	for (const pattern of FORBIDDEN_PATTERNS) {
 		if (pattern.test(normalized)) {
 			return {

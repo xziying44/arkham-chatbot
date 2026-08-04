@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { buildSystemPrompt } from "./system-prompt.ts";
 import { createDefaultTools } from "../tools/index.ts";
 import { createSendMessageTool } from "../tools/send-message.ts";
+import { createLoadSkillTool } from "../tools/load-skill.ts";
 import type { PendingAskHolder } from "../tools/ask-user.ts";
 import { HistoryStore } from "../session/history.ts";
 import { MemoryStore } from "../session/memory.ts";
@@ -94,7 +95,11 @@ export class ChatBotSession {
 					},
 				})]
 			: [];
-		this.tools = [...createDefaultTools(opts.env), ...sendMessageTool, ...(opts.extraTools ?? [])];
+		// load_skill 工具：agent 通过工具调用加载技能（比 read SKILL.md 更结构化）。
+		const loadSkillTool = opts.skills?.length
+			? [createLoadSkillTool({ skills: opts.skills })]
+			: [];
+		this.tools = [...createDefaultTools(opts.env), ...sendMessageTool, ...loadSkillTool, ...(opts.extraTools ?? [])];
 	}
 
 	/** 激活：确保工作目录存在，读历史/记忆/记忆索引，构造 Agent。 */
