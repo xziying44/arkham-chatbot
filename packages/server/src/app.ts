@@ -22,6 +22,7 @@ import {
 } from "@arkham/chatbot-store";
 import { LogBus, startAdminServer, type AdminServer } from "@arkham/chatbot-admin-api";
 import { BotManager, type SandboxConfig } from "./bot-manager.ts";
+import { createNonStreamStreamFn } from "./non-stream-bridge.ts";
 import { loadConfig, type AppConfig } from "./config.ts";
 import { bootstrapIfEmpty, loadBotConfigs } from "./bootstrap.ts";
 
@@ -112,15 +113,20 @@ export async function startApp(): Promise<AppRuntime> {
 	const messages = new MessageRepository(db);
 
 	// 多机器人编排器。
-	// streamFn 包装：注入 LLM 请求超时（防止推理模型在流式模式下无限挂起）。
-	const LLM_TIMEOUT_MS = 120_000; // 2 分钟，推理模型可能需要较长时间
-	const streamFn = (model: Model<any>, context: any, options?: any) =>
-		models.streamSimple(model, context, { ...options, timeoutMs: LLM_TIMEOUT_MS });
+	// streamFn 策略：
+	// - OpenAI Chat Completions 端点：用非流式桥接（某些端点流式模式有 bug，
+	//   推理模型只输出 reasoning_content 不输出 content；非流式正常）
+	// - 其它端点（Anthropic 等）：走原始流式 + 2分钟超时
+	const LLM_TIMEOUT_MS = 120_000;
+	const nonStreamFn = createNonStreamStreamFn(
+		(model: Model<any>, context: any, options?: any) =>
+			models.streamSimple(model, context, { ...options, timeoutMs: LLM_TIMEOUT_MS }),
+	);
 	const botManager = new BotManager({
 		dataRoot: config.dataDir,
 		model,
 		models,
-		streamFn,
+		streamFn: nonStreamFn,
 		sandbox: settings.sandbox,
 		sessionTtlMs: settings.sessionTtlMs,
 		reaperIntervalMs: settings.reaperIntervalMs,
