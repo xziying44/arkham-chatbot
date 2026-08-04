@@ -4,15 +4,9 @@ import { Type, type Static } from "typebox";
 /**
  * send_message 工具：让 agent 主动决定何时发送消息给用户。
  *
- * 设计理念：
- * - agent 的文字输出（assistant message content）不再自动发送给用户，
- *   只是 agent 的"思考过程"。
- * - agent 想发消息时，调用此工具——这是 agent 的主动决策。
- * - 这样 agent 可以在多轮工具调用中自由思考、读文件、执行命令，
- *   只在准备好回复时才发消息。避免中间步骤刷屏。
- *
- * 用法：agent 在回复用户时调用 send_message(text)，
- * 文字会通过 sendMessage 回调实际发送到 QQ。
+ * agent 的文字输出（assistant content）不再自动发送给用户——只是思考过程。
+ * agent 想发消息时调用此工具。这样 agent 可以在多轮工具调用中自由思考，
+ * 只在准备好回复时才发消息，避免中间步骤刷屏。
  */
 
 const sendMessageSchema = Type.Object({

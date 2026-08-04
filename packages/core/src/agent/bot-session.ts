@@ -61,6 +61,8 @@ export class ChatBotSession {
 	private readonly tools: AgentTool[];
 	/** 激活时构建并缓存，供管理端只读查看。 */
 	private systemPromptCache: string | undefined;
+	/** 本次 prompt run 中 agent 是否已通过 send_message 工具发送过消息。 */
+	private messageSentThisRun = false;
 	/**
 	 * 群消息合并注入的「触发消息」：当前 prompt run 是由哪条群消息触发的。
 	 * steer 进来的新消息不会开新 run，回复应引用「触发这条 run 的消息」。
@@ -77,7 +79,12 @@ export class ChatBotSession {
 		this.memoryFiles = new MemoryFiles(opts.scopeDir);
 		// send_message 工具：agent 主动决定何时发消息（替代自动发送文字输出）。
 		const sendMessageTool = opts.onSendMessage
-			? [createSendMessageTool({ send: opts.onSendMessage })]
+			? [createSendMessageTool({
+					send: async (text: string) => {
+						this.messageSentThisRun = true;
+						await opts.onSendMessage!(text);
+					},
+				})]
 			: [];
 		this.tools = [...createDefaultTools(opts.env), ...sendMessageTool, ...(opts.extraTools ?? [])];
 	}
@@ -184,10 +191,8 @@ export class ChatBotSession {
 
 	/** 实际跑一次 agent.prompt，收集 assistant 文本。 */
 	private async runPrompt(formattedText: string): Promise<string> {
-		// 当有 send_message 工具时，agent 的文字输出不自动发送——
-		// agent 主动调用 send_message 工具来发消息。
-		// collector 仅收集最终文字作为 fallback（agent 没调 send_message 时的兜底）。
 		const hasSendTool = !!this.opts.onSendMessage;
+		this.messageSentThisRun = false;
 		const collector = new AssistantTextCollector(hasSendTool ? undefined : this.opts.onIntermediateText);
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
 		try {
@@ -199,6 +204,9 @@ export class ChatBotSession {
 		} finally {
 			unsubscribe();
 		}
+		// 有 send_message 工具且 agent 已通过工具发送了消息 → 返回空（router 不重复发）。
+		// agent 没调 send_message（漏了）→ 用最终文字兜底。
+		if (hasSendTool && this.messageSentThisRun) return "";
 		return collector.text;
 	}
 
