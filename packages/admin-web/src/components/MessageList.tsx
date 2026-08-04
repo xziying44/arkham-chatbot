@@ -24,6 +24,20 @@ function extractText(content: unknown): string {
   return "";
 }
 
+/** 从消息 content 里提取 send_message 工具调用的文本参数。 */
+function extractSentMessage(content: unknown): string | null {
+  if (!Array.isArray(content)) return null;
+  for (const c of content) {
+    if (typeof c === "object" && c !== null && (c as { type: string }).type === "toolCall") {
+      const tc = c as { type: string; name?: string; arguments?: Record<string, unknown> };
+      if (tc.name === "send_message" && tc.arguments?.text) {
+        return String(tc.arguments.text);
+      }
+    }
+  }
+  return null;
+}
+
 /** 判断消息在聊天视图里的归类。 */
 function classify(msg: AgentMessage): "user" | "assistant" | "system" | "tool" {
   if (msg.role === "user") return "user";
@@ -37,10 +51,47 @@ function MessageBubble({ msg, index }: { msg: AgentMessage; index: number }) {
   const [modalOpen, setModalOpen] = useState(false);
   const kind = classify(msg);
   const text = extractText(msg.content);
+  // send_message 工具调用的文本——渲染为普通消息气泡而非工具调用。
+  const sentMessage = extractSentMessage(msg.content);
   const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString("zh-CN", { hour12: false }) : null;
+
+  // 如果 assistant 消息包含 send_message 工具调用，渲染为普通气泡（实际发给用户的消息）。
+  // 其它工具调用（read/write/bash/send_image 等）仍然渲染为系统条。
+  if (kind === "assistant" && sentMessage !== null) {
+    return (
+      <>
+        <div style={{ display: "flex", justifyContent: "flex-start", margin: "8px 0" }}>
+          <div
+            onClick={() => setModalOpen(true)}
+            style={{
+              maxWidth: "70%",
+              cursor: "pointer",
+              background: "#f0f0f0",
+              color: "#333",
+              padding: "8px 14px",
+              borderRadius: 12,
+              wordBreak: "break-word",
+              whiteSpace: "pre-wrap",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+            }}
+          >
+            <div style={{ fontSize: 12, marginBottom: 2, opacity: 0.7 }}>
+              机器人{time ? ` · ${time}` : ""}
+            </div>
+            <div>{sentMessage}</div>
+          </div>
+        </div>
+        <Modal title={`原始消息 #${index}`} open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={640}>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, maxHeight: "60vh", overflow: "auto" }}>{JSON.stringify(msg, null, 2)}</pre>
+        </Modal>
+      </>
+    );
+  }
 
   // 系统类消息（工具调用/结果/bash 执行）渲染成居中的小条。
   if (kind === "system" || kind === "tool") {
+    // send_message 的工具结果（"消息已发送"）不需要显示。
+    if (kind === "tool" && msg.toolName === "send_message") return null;
     const label =
       msg.role === "bashExecution"
         ? `🔧 执行命令：${(msg.command ?? "").slice(0, 80)}`
