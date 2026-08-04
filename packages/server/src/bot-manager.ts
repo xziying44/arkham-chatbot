@@ -282,6 +282,10 @@ export class BotManager {
 			onIntermediateText: (scope, text, replyToMessageId) => {
 				void adapter.sendText(scope, text, replyToMessageId).catch(() => {});
 			},
+			// send_message 工具：agent 主动调用时发送消息。
+			onSendMessage: async (scope, text, replyToMessageId) => {
+				await adapter.sendText(scope, text, replyToMessageId);
+			},
 		});
 		sessions.start();
 

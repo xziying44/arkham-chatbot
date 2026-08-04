@@ -5,6 +5,7 @@ import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { buildSystemPrompt } from "./system-prompt.ts";
 import { createDefaultTools } from "../tools/index.ts";
+import { createSendMessageTool } from "../tools/send-message.ts";
 import { HistoryStore } from "../session/history.ts";
 import { MemoryStore } from "../session/memory.ts";
 import { MemoryFiles } from "../session/memory-files.ts";
@@ -42,6 +43,11 @@ export interface BotSessionOptions {
 	 * 最终回复仍然由 prompt() 返回值发送（router 负责）。
 	 */
 	readonly onIntermediateText?: (text: string) => void;
+	/**
+	 * 发送消息回调：agent 调用 send_message 工具时触发。
+	 * agent 的文字输出不自动发送——只有主动调用 send_message 才发送。
+	 */
+	readonly onSendMessage?: (text: string) => Promise<void>;
 }
 
 export class ChatBotSession {
@@ -69,9 +75,11 @@ export class ChatBotSession {
 		this.history = new HistoryStore(opts.scopeDir);
 		this.memory = new MemoryStore(opts.scopeDir);
 		this.memoryFiles = new MemoryFiles(opts.scopeDir);
-		// 不单独做 memory 工具——记忆文件在沙箱工作目录内（workspace/memories/），
-		// agent 用自带的 read/write/edit/bash 直接操作，沙箱的 per-scope 隔离保证不串。
-		this.tools = [...createDefaultTools(opts.env), ...(opts.extraTools ?? [])];
+		// send_message 工具：agent 主动决定何时发消息（替代自动发送文字输出）。
+		const sendMessageTool = opts.onSendMessage
+			? [createSendMessageTool({ send: opts.onSendMessage })]
+			: [];
+		this.tools = [...createDefaultTools(opts.env), ...sendMessageTool, ...(opts.extraTools ?? [])];
 	}
 
 	/** 激活：确保工作目录存在，读历史/记忆/记忆索引，构造 Agent。 */
@@ -176,13 +184,15 @@ export class ChatBotSession {
 
 	/** 实际跑一次 agent.prompt，收集 assistant 文本。 */
 	private async runPrompt(formattedText: string): Promise<string> {
-		const collector = new AssistantTextCollector(this.opts.onIntermediateText);
+		// 当有 send_message 工具时，agent 的文字输出不自动发送——
+		// agent 主动调用 send_message 工具来发消息。
+		// collector 仅收集最终文字作为 fallback（agent 没调 send_message 时的兜底）。
+		const hasSendTool = !!this.opts.onSendMessage;
+		const collector = new AssistantTextCollector(hasSendTool ? undefined : this.opts.onIntermediateText);
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
 		try {
 			await this.agent.prompt(formattedText);
 		} catch (error) {
-			// LLM 请求失败（API 500/超时等，pi-ai 内部已重试 maxRetries 次仍失败）：
-			// 回复友好的错误提示给用户。
 			const errMsg = error instanceof Error ? error.message : String(error);
 			console.error(`[bot] agent.prompt 失败: ${errMsg}`);
 			return "服务器开小差了，请稍后再试。";

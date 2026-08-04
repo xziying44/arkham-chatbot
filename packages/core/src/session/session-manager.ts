@@ -45,6 +45,11 @@ export interface SessionManagerOptions {
 	 * 让消息实时发送而非攒到最后。由 router 注入 adapter.sendText。
 	 */
 	readonly onIntermediateText?: (scope: ScopeKey, text: string, replyToMessageId?: string) => void;
+	/**
+	 * 发送消息回调。agent 调用 send_message 工具时触发。
+	 * agent 的文字输出不自动发送，只有主动调用 send_message 才发送。
+	 */
+	readonly onSendMessage?: (scope: ScopeKey, text: string, replyToMessageId?: string) => Promise<void>;
 }
 
 interface ActiveEntry {
@@ -62,8 +67,8 @@ interface ActiveEntry {
  * 4. **断电续传**：磁盘上的 memory.md / session.jsonl 让下次激活恢复上下文。
  */
 export class SessionManager {
-	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText">> &
-		Pick<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText">;
+	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage">> &
+		Pick<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage">;
 	private readonly active = new Map<string, ActiveEntry>();
 	private reaperTimer: ReturnType<typeof setInterval> | undefined;
 	private shuttingDown = false;
@@ -82,6 +87,7 @@ export class SessionManager {
 			skills: opts.skills,
 			extraToolsFactory: opts.extraToolsFactory,
 			onIntermediateText: opts.onIntermediateText,
+			onSendMessage: opts.onSendMessage,
 		};
 	}
 
@@ -160,6 +166,9 @@ export class SessionManager {
 			replyToHolder,
 			onIntermediateText: this.opts.onIntermediateText
 				? (text: string) => this.opts.onIntermediateText!(scope, text, replyToHolder.current)
+				: undefined,
+			onSendMessage: this.opts.onSendMessage
+				? async (text: string) => this.opts.onSendMessage!(scope, text, replyToHolder.current)
 				: undefined,
 		});
 		await session.activate();
