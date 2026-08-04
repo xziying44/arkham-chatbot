@@ -47,12 +47,18 @@ export function createSendImageTool(opts: CreateSendImageToolOptions): AgentTool
 		parameters: sendImageSchema,
 		async execute(_toolCallId, params, _signal, _onUpdate) {
 			const { filePath, caption } = params;
+			// 解析为工作目录内的绝对路径。
+			// agent 传入的可能是相对路径（如 "cards/out/000.png"），必须相对于 workspaceDir 解析，
+			// 而非进程 cwd（进程 cwd 是项目根，不是沙箱工作目录）。
+			const resolvedPath = opts.workspaceDir
+				? resolve(opts.workspaceDir, filePath)
+				: resolve(filePath);
 			// 硬边界：只允许发送沙箱工作目录内的图片。
 			// 用 realpath 解析符号链接（防 link 逃逸到沙箱外），再做严格的目录包含判断
 			// （防字符串前缀误判：/data/x 不是 /data/xyz 的子目录）。
 			if (opts.workspaceDir) {
 				const wsReal = await realpath(opts.workspaceDir).catch(() => null);
-				const fileReal = await realpath(resolve(opts.workspaceDir, filePath)).catch(() => null);
+				const fileReal = await realpath(resolvedPath).catch(() => null);
 				const wsPrefix = wsReal?.endsWith(sep) ? wsReal : `${wsReal}${sep}`;
 				const inside = wsReal != null && fileReal != null && (fileReal === wsReal || fileReal.startsWith(wsPrefix));
 				if (!inside) {
@@ -63,7 +69,7 @@ export function createSendImageTool(opts: CreateSendImageToolOptions): AgentTool
 				}
 			}
 			try {
-				const info = await stat(filePath);
+				const info = await stat(resolvedPath);
 				if (!info.isFile()) {
 					return { content: [{ type: "text", text: `错误：${filePath} 不是文件` }], details: undefined };
 				}
@@ -73,7 +79,7 @@ export function createSendImageTool(opts: CreateSendImageToolOptions): AgentTool
 				return { content: [{ type: "text", text: `错误：无法访问 ${filePath}${hint}` }], details: undefined };
 			}
 			try {
-				await opts.send(opts.scopeId, filePath, opts.getReplyToMsgId?.());
+				await opts.send(opts.scopeId, resolvedPath, opts.getReplyToMsgId?.());
 			} catch (error) {
 				return {
 					content: [{ type: "text", text: `发送失败：${(error as Error).message}` }],
