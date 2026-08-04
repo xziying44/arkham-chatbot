@@ -16,6 +16,8 @@ export interface AppConfig {
 	readonly llm: {
 		/** 自定义 Anthropic 兼容端点（如智谱/DeepSeek）。未设则用官方 api.anthropic.com。 */
 		readonly anthropicBaseUrl?: string;
+		/** 自定义 OpenAI Chat Completions 兼容端点。未设则用官方 api.openai.com。 */
+		readonly openaiBaseUrl?: string;
 	};
 	readonly session: { ttlMs: number; reaperIntervalMs: number };
 	readonly sandbox: { enabled: boolean; networkDisabled: boolean; timeoutSeconds: number };
@@ -84,6 +86,7 @@ export function loadConfig(): AppConfig {
 		model: optional("CHATBOT_MODEL") ?? "anthropic/deepseek-v4-flash",
 		llm: {
 			anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
+			openaiBaseUrl: process.env.OPENAI_BASE_URL,
 		},
 		session: {
 			ttlMs: int("CHATBOT_SESSION_TTL_MS", 3_600_000),

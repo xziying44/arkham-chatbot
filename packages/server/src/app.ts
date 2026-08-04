@@ -1,7 +1,9 @@
 import { type Model, type Models, createModels, createProvider } from "@earendil-works/pi-ai";
 import * as builtinProviders from "@earendil-works/pi-ai/providers/all";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import {
 	createLogger,
 	addSink,
@@ -27,6 +29,7 @@ import { bootstrapIfEmpty, loadBotConfigs } from "./bootstrap.ts";
 export interface ResolvedSettings {
 	readonly model: string;
 	readonly anthropicBaseUrl?: string;
+	readonly openaiBaseUrl?: string;
 	readonly sessionTtlMs: number;
 	readonly reaperIntervalMs: number;
 	readonly sandbox: SandboxConfig;
@@ -38,6 +41,7 @@ export function resolveSettings(config: AppConfig, db: DatabaseSync): ResolvedSe
 	return {
 		model: s.getOr(SettingsKeys.llmModel, config.model),
 		anthropicBaseUrl: s.get(SettingsKeys.llmAnthropicBaseUrl) ?? config.llm.anthropicBaseUrl,
+		openaiBaseUrl: s.get(SettingsKeys.llmOpenaiBaseUrl) ?? config.llm.openaiBaseUrl,
 		sessionTtlMs: s.getInt(SettingsKeys.sessionTtlMs, config.session.ttlMs),
 		reaperIntervalMs: config.session.reaperIntervalMs, // 不在管理端改，用 env
 		sandbox: {
@@ -161,6 +165,7 @@ export async function startApp(): Promise<AppRuntime> {
  * - 注册全部内置 provider（Anthropic 官方/OpenAI/DeepSeek/...）。
  * - 当配置了自定义 Anthropic 兼容端点（如 DeepSeek/智谱）时，用该端点重建 anthropic provider，
  *   并把 model 指定的模型注册进去。
+ * - 当配置了自定义 OpenAI Chat Completions 兼容端点时，用该端点重建 openai provider。
  */
 export function buildModels(settings: ResolvedSettings): { models: Models; model: Model<any> } {
 	const models = createModels();
@@ -191,6 +196,35 @@ export function buildModels(settings: ResolvedSettings): { models: Models; model
 				auth: base.auth,
 				models: [customModel],
 				api: anthropicMessagesApi(),
+			});
+			(models as ReturnType<typeof createModels>).setProvider(customProvider);
+		}
+	}
+
+	// 自定义 OpenAI Chat Completions 兼容端点（如 OpenRouter / 各种代理）。
+	// model 格式: openai/<model-id>，baseUrl 去 /v1/chat/completions 后缀。
+	if (settings.openaiBaseUrl) {
+		const { provider: providerId, modelId } = parseModelSpec(settings.model);
+		if (providerId === "openai") {
+			const customModel: Model<"openai-completions"> = {
+				id: modelId,
+				name: modelId,
+				api: "openai-completions",
+				provider: "openai",
+				baseUrl: settings.openaiBaseUrl,
+				reasoning: false,
+				input: ["text", "image"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1_000_000,
+				maxTokens: 8192,
+			};
+			const customProvider = createProvider({
+				id: "openai",
+				name: "OpenAI (custom endpoint)",
+				baseUrl: settings.openaiBaseUrl,
+				auth: openaiProvider().auth,
+				models: [customModel],
+				api: openAICompletionsApi(),
 			});
 			(models as ReturnType<typeof createModels>).setProvider(customProvider);
 		}
