@@ -99,6 +99,7 @@ export class SessionManager {
 			extraToolsFactory: opts.extraToolsFactory,
 			onIntermediateText: opts.onIntermediateText,
 			onSendMessage: opts.onSendMessage,
+			onAttachment: opts.onAttachment,
 		};
 	}
 
