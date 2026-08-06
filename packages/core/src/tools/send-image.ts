@@ -33,15 +33,20 @@ export interface CreateSendImageToolOptions {
 	 */
 	readonly workspaceDir?: string;
 	/**
-	 * 额外允许发图的宿主机根目录（绝对路径）。
+	 * 路径映射：沙箱内可见前缀 → 宿主机真实目录。
 	 *
-	 * 用途：readOnlyBinds 挂载的目录（如卡牌数据库）在生产 bwrap 下是 workspace
-	 * 内的真实挂载点，realpath 检查自然通过；但开发模式 macOS 下挂载点是 symlink，
-	 * realpath 会解析到宿主真实路径（workspace 外），导致边界检查误拒。
-	 * 把这些挂载源的宿主路径加入此白名单，让发图在两种模式下都正常工作。
-	 * 安全性：只放行显式配置的目录，不放宽任意路径。
+	 * 用途：readOnlyBinds 挂载的目录（如卡牌数据库 `cards-db`）在生产 bwrap 下只是
+	 * 容器内的挂载点——**宿主机进程看不到 `${workspaceDir}/cards-db` 这个路径**。
+	 * 而 send_image 在宿主机进程里执行（NodeExecutionEnv 的 fs 方法直通宿主），
+	 * 直接 resolve 工作目录下的 cards-db 会 ENOENT。
+	 *
+	 * 解决：agent 传 `cards-db/card_images/01001_a.jpg` 时，先按映射把前缀
+	 * `cards-db` 替换成宿主真实路径（如 `/home/arkham/.../arkham-card-database`），
+	 * 再做边界检查和发送。映射后的宿主路径视为「允许发送」的合法根。
+	 *
+	 * 安全性：只放行显式配置的映射，不放宽任意路径；映射目标做 realpath 校验。
 	 */
-	readonly extraAllowedRoots?: readonly string[];
+	readonly pathMappings?: ReadonlyArray<{ readonly prefix: string; readonly hostDir: string }>;
 }
 
 /**
@@ -57,27 +62,50 @@ export function createSendImageTool(opts: CreateSendImageToolOptions): AgentTool
 		parameters: sendImageSchema,
 		async execute(_toolCallId, params, _signal, _onUpdate) {
 			const { filePath, caption } = params;
-			// 解析为工作目录内的绝对路径。
-			// agent 传入的可能是相对路径（如 "cards/out/000.png"），必须相对于 workspaceDir 解析，
-			// 而非进程 cwd（进程 cwd 是项目根，不是沙箱工作目录）。
-			const resolvedPath = opts.workspaceDir
-				? resolve(opts.workspaceDir, filePath)
-				: resolve(filePath);
-			// 硬边界：只允许发送沙箱工作目录内的图片，或 extraAllowedRoots 白名单根内的图片。
+			// 路径解析：
+			// 1. 先检查 pathMappings（如 cards-db → 宿主数据库目录）。
+			//    agent 传 "cards-db/card_images/01001_a.jpg" 时，前缀 cards-db 在生产 bwrap
+			//    下只是容器内挂载点，宿主进程看不到——必须映射回宿主真实路径才能读到文件。
+			// 2. 不匹配任何映射时，按工作目录解析（agent 渲染产物在工作目录内）。
+			let resolvedPath: string;
+			let mappedFromPrefix = false;
+			const mapping = matchPathMapping(filePath, opts.pathMappings);
+			if (mapping) {
+				// 把沙箱可见前缀替换成宿主真实目录。
+				// 注意：filePath 可能带 ./ 前缀，而 matchPathMapping 内部做了规范化匹配，
+				// 这里也要规范化后再 slice，避免 ./ 前缀导致截断错位。
+				const normalized = filePath.replace(/^\.?\//, "");
+				const p = mapping.prefix.replace(/^\.?\//, "").replace(/\/+$/, "");
+				const rel = normalized.slice(p.length).replace(/^\/+/, "");
+				resolvedPath = resolve(mapping.hostDir, rel);
+				mappedFromPrefix = true;
+			} else {
+				// agent 传入的可能是相对路径（如 "cards/out/000.png"），必须相对于 workspaceDir 解析，
+				// 而非进程 cwd（进程 cwd 是项目根，不是沙箱工作目录）。
+				resolvedPath = opts.workspaceDir
+					? resolve(opts.workspaceDir, filePath)
+					: resolve(filePath);
+			}
+			// 硬边界：只允许发送沙箱工作目录内的图片，或 pathMappings 映射的宿主根内的图片。
 			// 用 realpath 解析符号链接（防 link 逃逸到沙箱外），再做严格的目录包含判断
 			// （防字符串前缀误判：/data/x 不是 /data/xyz 的子目录）。
-			// extraAllowedRoots 解决：开发模式 macOS 下 readOnlyBinds 是 symlink，
-			// realpath 解析到宿主真实路径（workspace 外），需白名单放行配置过的挂载源。
 			if (opts.workspaceDir) {
-				const wsReal = await realpath(opts.workspaceDir).catch(() => null);
 				const fileReal = await realpath(resolvedPath).catch(() => null);
-				const wsPrefix = wsReal?.endsWith(sep) ? wsReal : `${wsReal}${sep}`;
-				const insideWorkspace = wsReal != null && fileReal != null && (fileReal === wsReal || fileReal.startsWith(wsPrefix));
-				// 检查 extraAllowedRoots（每个根也 realpath 解析后比较）。
-				const insideExtra = fileReal != null && await isUnderAnyRoot(fileReal, opts.extraAllowedRoots);
-				if (!insideWorkspace && !insideExtra) {
+				let allowed: boolean;
+				if (mappedFromPrefix && mapping) {
+					// 映射路径：校验落在映射的宿主根内（防 ../ 逃逸）。
+					const rootReal = await realpath(mapping.hostDir).catch(() => null);
+					const rootPrefix = rootReal?.endsWith(sep) ? rootReal : `${rootReal}${sep}`;
+					allowed = rootReal != null && fileReal != null && (fileReal === rootReal || fileReal.startsWith(rootPrefix));
+				} else {
+					// 工作目录路径：校验落在 workspace 内。
+					const wsReal = await realpath(opts.workspaceDir).catch(() => null);
+					const wsPrefix = wsReal?.endsWith(sep) ? wsReal : `${wsReal}${sep}`;
+					allowed = wsReal != null && fileReal != null && (fileReal === wsReal || fileReal.startsWith(wsPrefix));
+				}
+				if (!allowed) {
 					return {
-						content: [{ type: "text", text: `错误：${filePath} 不在工作目录内，无法发送。只能发送工作目录内的图片。` }],
+						content: [{ type: "text", text: `错误：${filePath} 不在可发送的目录范围内，无法发送。只能发送工作目录内的图片，或卡牌数据库（cards-db/）内的卡图。` }],
 						details: undefined,
 					};
 				}
@@ -107,17 +135,22 @@ export function createSendImageTool(opts: CreateSendImageToolOptions): AgentTool
 }
 
 /**
- * 判断 fileReal（已 realpath 解析的绝对路径）是否落在任一白名单根目录内。
- * 每个根也 realpath 解析后做严格的目录包含判断（防前缀误判）。
+ * 匹配路径映射：返回 filePath 命中的第一个映射（prefix 最长匹配优先）。
+ * filePath 可能是相对路径（如 "cards-db/xxx.jpg"）或绝对路径（workspace 内）。
+ * 匹配规则：filePath 以 `prefix` 或 `prefix/` 开头（大小写敏感）。
  */
-async function isUnderAnyRoot(fileReal: string, roots?: readonly string[]): Promise<boolean> {
-	if (!roots || roots.length === 0) return false;
-	for (const r of roots) {
-		const rootReal = await realpath(r).catch(() => null);
-		if (rootReal == null) continue;
-		const rootPrefix = rootReal.endsWith(sep) ? rootReal : `${rootReal}${sep}`;
-		if (fileReal === rootReal || fileReal.startsWith(rootPrefix)) return true;
+function matchPathMapping(
+	filePath: string,
+	mappings?: ReadonlyArray<{ readonly prefix: string; readonly hostDir: string }>,
+): { prefix: string; hostDir: string } | undefined {
+	if (!mappings || mappings.length === 0) return undefined;
+	// 按前缀长度降序，保证最长匹配优先（避免 "cards" 误匹配 "cards-db"）。
+	const sorted = [...mappings].sort((a, b) => b.prefix.length - a.prefix.length);
+	const normalized = filePath.replace(/^\.?\//, "");
+	for (const m of sorted) {
+		const p = m.prefix.replace(/^\.?\//, "").replace(/\/+$/, "");
+		if (normalized === p || normalized.startsWith(`${p}/`)) return m;
 	}
-	return false;
+	return undefined;
 }
 
