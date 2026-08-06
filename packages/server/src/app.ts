@@ -22,7 +22,6 @@ import {
 } from "@arkham/chatbot-store";
 import { LogBus, startAdminServer, type AdminServer } from "@arkham/chatbot-admin-api";
 import { BotManager, type SandboxConfig } from "./bot-manager.ts";
-import { createNonStreamStreamFn } from "./non-stream-bridge.ts";
 import { loadConfig, type AppConfig } from "./config.ts";
 import { bootstrapIfEmpty, loadBotConfigs } from "./bootstrap.ts";
 
@@ -113,26 +112,26 @@ export async function startApp(): Promise<AppRuntime> {
 	const messages = new MessageRepository(db);
 
 	// 多机器人编排器。
-	// streamFn 策略：
-	// - OpenAI Chat Completions 端点：用非流式桥接（某些端点流式模式有 bug，
-	//   推理模型只输出 reasoning_content 不输出 content；非流式正常）
-	// - 其它端点（Anthropic 等）：走原始流式 + 2分钟超时 + 5次重试
+	// streamFn 策略：走 pi-ai 原生流式（streamSimple），带 2 分钟超时 + 3 次重试。
+	// DeepSeek 的 OpenAI 兼容端点流式模式正常（工具参数完整返回），
+	// pi-ai 按 baseUrl 自动检测 deepseek 兼容模式（thinkingFormat: "deepseek"），
+	// 正确分离 reasoning_content 与 content。
+	// 注意：DeepSeek 的 Anthropic 兼容端点在 stream + thinking + tool_use 时
+	// 有工具参数解析为空的 bug，所以用 OpenAI 端点而非 Anthropic 端点。
 	const LLM_TIMEOUT_MS = 120_000;
-	const LLM_MAX_RETRIES = 5;
-	const nonStreamFn = createNonStreamStreamFn(
-		(model: Model<any>, context: any, options?: any) =>
-			models.streamSimple(model, context, {
-				...options,
-				timeoutMs: LLM_TIMEOUT_MS,
-				maxRetries: LLM_MAX_RETRIES,
-				maxRetryDelayMs: 8_000,
-			}),
-	);
+	const LLM_MAX_RETRIES = 3;
+	const nativeStreamFn = (model: Model<any>, context: any, options?: any) =>
+		models.streamSimple(model, context, {
+			...options,
+			timeoutMs: LLM_TIMEOUT_MS,
+			maxRetries: LLM_MAX_RETRIES,
+			maxRetryDelayMs: 8_000,
+		});
 	const botManager = new BotManager({
 		dataRoot: config.dataDir,
 		model,
 		models,
-		streamFn: nonStreamFn,
+		streamFn: nativeStreamFn,
 		sandbox: settings.sandbox,
 		sessionTtlMs: settings.sessionTtlMs,
 		reaperIntervalMs: settings.reaperIntervalMs,
@@ -140,6 +139,7 @@ export async function startApp(): Promise<AppRuntime> {
 		skillsDir: config.skillsDir,
 		arkhamBinPath: config.arkhamBinPath,
 		arkhamAssetsDir: config.arkhamAssetsDir,
+		clearHistoryOnStart: config.clearHistoryOnStart,
 		logger: appLog,
 	});
 
@@ -219,20 +219,25 @@ export function buildModels(settings: ResolvedSettings): { models: Models; model
 
 	// 自定义 OpenAI Chat Completions 兼容端点（如 OpenRouter / 各种代理）。
 	// model 格式: openai/<model-id>，baseUrl 去 /v1/chat/completions 后缀。
+	// 注意：baseUrl 含 "deepseek.com" 时 pi-ai 自动检测为 DeepSeek 兼容模式
+	//（thinkingFormat: "deepseek" + requiresReasoningContentOnAssistantMessages: true），
+	// 正确处理 reasoning_content 分离。不要在 baseUrl 里加 /v1 等路径后缀，否则检测失败。
 	if (settings.openaiBaseUrl) {
 		const { provider: providerId, modelId } = parseModelSpec(settings.model);
 		if (providerId === "openai") {
+			// DeepSeek 端点是思考模型（reasoning: true），pi-ai 据此启用 thinking 处理
+			const isDeepSeek = settings.openaiBaseUrl.includes("deepseek.com");
 			const customModel: Model<"openai-completions"> = {
 				id: modelId,
 				name: modelId,
 				api: "openai-completions",
 				provider: "openai",
 				baseUrl: settings.openaiBaseUrl,
-				reasoning: false,
+				reasoning: isDeepSeek,
 				input: ["text", "image"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 1_000_000,
-				maxTokens: 8192,
+				maxTokens: isDeepSeek ? 8192 : 8192,
 			};
 			const customProvider = createProvider({
 				id: "openai",

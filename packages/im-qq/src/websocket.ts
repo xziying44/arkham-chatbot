@@ -4,7 +4,6 @@ import {
 	C2C_MESSAGE_CREATE,
 	DEFAULT_HEARTBEAT_INTERVAL_MS,
 	DEFAULT_INTENTS,
-	DEFAULT_MAX_RETRIES,
 	FATAL_CLOSE_CODES,
 	GROUP_AT_MESSAGE_CREATE,
 	INTERACTION_CREATE,
@@ -56,7 +55,6 @@ export interface QqIncomingMessage {
 export class QQWebSocketReceiver extends EventEmitter {
 	private readonly client: QQClient;
 	private readonly intents: number;
-	private readonly maxRetries: number;
 
 	private ws: WebSocket | undefined;
 	private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
@@ -72,7 +70,6 @@ export class QQWebSocketReceiver extends EventEmitter {
 		super();
 		this.client = opts.client;
 		this.intents = opts.intents ?? DEFAULT_INTENTS;
-		this.maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
 	}
 
 	async start(): Promise<void> {
@@ -283,28 +280,23 @@ export class QQWebSocketReceiver extends EventEmitter {
 	}
 
 	private async reconnect(): Promise<void> {
-		if (this.retries >= this.maxRetries) {
-			this.emit("fatal", { code: -1, reason: `exceeded ${this.maxRetries} retries` });
-			this.running = false;
-			return;
-		}
-		const delay = Math.min(RECONNECT_BASE_DELAY_MS * 2 ** this.retries, RECONNECT_MAX_DELAY_MS);
-		this.retries++;
-		this.emit("reconnecting", { attempt: this.retries, delayMs: delay });
-		await new Promise((r) => setTimeout(r, delay));
-		if (!this.running) return;
-		try {
-			await this.connect();
-		} catch (error) {
-			// connect 失败（getGateway 限频/网络问题等）不崩溃进程，
-			// 递归重试（retries 已递增，退避会更长）。
-			console.warn(`[qq-ws] 重连失败 (第${this.retries}次): ${(error as Error).message}，继续退避重试`);
-			// 递归前检查是否已达上限或已停止
-			if (this.running && this.retries < this.maxRetries) {
-				await this.reconnect();
-			} else if (this.running) {
-				this.emit("fatal", { code: -1, reason: `exceeded ${this.maxRetries} retries (last: ${(error as Error).message})` });
-				this.running = false;
+		// 无限重连：QQ 服务端会周期性踢连接（4009 session 超时等），属于常态，
+		// 官方期望客户端重连恢复。曾经这里设了 maxRetries 上限，网络波动连续失败
+		// 几次就 fatal 永久躺平，导致"跑几天就掉线且不自愈"。现在改为无限指数退避
+		// （1s→2s→4s→...→封顶 30s），只有 FATAL_CLOSE_CODES（鉴权/封禁类，在 onClose
+		// 里处理）才真正永久停止。
+		while (this.running) {
+			const delay = Math.min(RECONNECT_BASE_DELAY_MS * 2 ** this.retries, RECONNECT_MAX_DELAY_MS);
+			this.retries++;
+			this.emit("reconnecting", { attempt: this.retries, delayMs: delay });
+			await new Promise((r) => setTimeout(r, delay));
+			if (!this.running) return;
+			try {
+				await this.connect();
+				return; // 连接成功（connect 内部 READY 后会清零 retries）
+			} catch (error) {
+				// connect 失败（getGateway 限频/网络问题等）不崩溃进程，继续退避重试。
+				console.warn(`[qq-ws] 重连失败 (第${this.retries}次): ${(error as Error).message}，${this.running ? "继续退避重试" : "已停止"}`);
 			}
 		}
 	}

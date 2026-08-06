@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { StreamFn, Skill } from "@earendil-works/pi-agent-core";
@@ -44,8 +44,14 @@ export interface BotManagerOptions {
 	readonly arkhamBinPath?: string;
 	/** arkham-cli 资产目录（宿主机绝对路径）。可选。 */
 	readonly arkhamAssetsDir?: string;
+	/**
+	 * 启动时清除所有 scope 的对话历史（不注入 session.jsonl 到上下文）。
+	 * 用于：改了提示词/技能/系统配置后，避免旧上下文污染新行为。
+	 * memory.md（长期记忆）不受影响，仍会加载。
+	 */
+	readonly clearHistoryOnStart?: boolean;
 	readonly logger?: Logger;
-}
+	}
 
 /** 一个运行中的机器人实例：adapter + 独立 session 池 + 路由器。 */
 interface BotInstance {
@@ -80,6 +86,10 @@ export class BotManager {
 
 	/** 启动：加载技能 → 为每个 enabled 的配置构建并连接实例。失败的机器人记日志、跳过，不阻塞其它。 */
 	async start(configs: BotConfig[]): Promise<void> {
+		// 可选：启动时清除所有 scope 的对话历史（改配置后避免旧上下文污染）。
+		if (this.opts.clearHistoryOnStart) {
+			await this.markAllHistoryCleared(configs);
+		}
 		// 加载技能（所有会话共享）。目录不存在或无技能文件不报错，只是没有技能可用。
 		try {
 			const { skills, diagnostics } = await loadSkillsFromDir(this.opts.skillsDir);
@@ -106,6 +116,42 @@ export class BotManager {
 			} catch (error) {
 				this.log.error("机器人启动失败", { botId: cfg.id, name: cfg.name, error: (error as Error).message });
 			}
+		}
+	}
+
+	/**
+	 * 给所有 scope 目录写「清除历史」标记（.history_cleared）。
+	 * ChatBotSession 激活时会消费这个标记 → 本次不注入 session.jsonl 历史。
+	 * memory.md（长期记忆）不受影响。
+	 *
+	 * 用途：改了提示词/技能/系统配置后重启，避免旧对话上下文里的行为模式污染新配置。
+	 */
+	private async markAllHistoryCleared(configs: BotConfig[]): Promise<void> {
+		let cleared = 0;
+		for (const cfg of configs) {
+			const botDir = this.botDataDir(cfg.id);
+			// 遍历 <botDir>/<kind>/<scopeId>/ 三层结构
+			for (const kind of ["group", "user"] as const) {
+				const kindDir = join(botDir, kind);
+				let scopeIds: string[];
+				try {
+					scopeIds = await readdir(kindDir);
+				} catch {
+					continue; // 目录不存在，跳过
+				}
+				for (const scopeId of scopeIds) {
+					const flagPath = join(kindDir, scopeId, ".history_cleared");
+					try {
+						await writeFile(flagPath, String(Date.now()), "utf8");
+						cleared++;
+					} catch {
+						// 写失败不阻断启动
+					}
+				}
+			}
+		}
+		if (cleared > 0) {
+			this.log.info("启动时已标记清除对话历史", { scopes: cleared, note: "memory.md 长期记忆保留" });
 		}
 	}
 
