@@ -45,8 +45,6 @@ export enum Intent {
 /** 默认订阅：群聊/私聊消息 + 群成员变更 + 互动事件（按钮回调）。 */
 export const DEFAULT_INTENTS = Intent.GROUP_AND_C2C_EVENT | Intent.GROUP_MEMBER | Intent.INTERACTION;
 
-/** READY 事件标识。 */
-export const READY_EVENT = "READY";
 /** 群@机器人消息事件。 */
 export const GROUP_AT_MESSAGE_CREATE = "GROUP_AT_MESSAGE_CREATE";
 /** C2C 私聊消息事件。 */
@@ -56,19 +54,32 @@ export const INTERACTION_CREATE = "INTERACTION_CREATE";
 
 /** 默认心跳间隔兜底（毫秒），以 HELLO 返回的 heartbeat_interval 为准。 */
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
-/** 重连退避基数（毫秒）。 */
-export const RECONNECT_BASE_DELAY_MS = 1_000;
+/**
+ * 重连退避基数（毫秒）。设为 3s 而非 1s：QQ 的 getGateway 接口有频率限制（100017），
+ * 退避太短会在网络抖动时连续触发限频，陷入「限频→失败→更快重试→更限频」的死循环。
+ */
+export const RECONNECT_BASE_DELAY_MS = 3_000;
 /** 最大重连退避（毫秒）。 */
-export const RECONNECT_MAX_DELAY_MS = 30_000;
+export const RECONNECT_MAX_DELAY_MS = 60_000;
 /** 默认最大重连次数。 */
 export const DEFAULT_MAX_RETRIES = 10;
+/**
+ * 心跳 ACK 容忍次数：连续这么多次心跳没收到 ACK 就认定连接已僵死，
+ * 主动断开重连（不等 QQ 服务端超时踢，那样更慢）。
+ */
+export const HEARTBEAT_ACK_TOLERANCE = 2;
 
 /**
  * 不可恢复的关闭码，收到后停止重连。
- * @see WebsocketCloseReason
+ * 来源：官方错误码表 https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/error-trace/websocket.html
+ * 4001 无效 opcode / 4002 无效 payload / 4010 无效 shard / 4011 需分片 /
+ * 4012 无效 version / 4013 无效 intent / 4014 intent 无权限 / 4914 下架 / 4915 封禁。
+ * 注意：4006（无效 session）和 4007（seq 错误）不是 fatal——它们要求重新 identify，
+ * 由 onClose 的分级逻辑处理（清 session 后走 identify 重连）。
  */
 export const FATAL_CLOSE_CODES = new Set([
-	4004, // TOKEN_INVALID
+	4001, // 无效 opcode
+	4002, // 无效 payload
 	4010, // SHARDING_INVALID
 	4011, // SHARDING_REQUIRED
 	4012, // INVALID_VERSION
@@ -77,3 +88,16 @@ export const FATAL_CLOSE_CODES = new Set([
 	4914, // 机器人已下架
 	4915, // 机器人已封禁
 ]);
+
+/**
+ * 允许 Resume 的关闭码：连接过期/服务端主动踢，session 仍有效，重连后应发 Resume(op6)。
+ * 4009 连接过期——官方明确「可以重新发起 resume」。
+ */
+export const RESUMABLE_CLOSE_CODES = new Set([
+	4009, // Session timeout（连接过期），可 resume
+]);
+
+/** READY 事件标识。 */
+export const READY_EVENT = "READY";
+/** RESUMED 事件标识（Resume 成功后服务端推送，表示漏掉的事件已补发完毕）。 */
+export const RESUMED_EVENT = "RESUMED";
