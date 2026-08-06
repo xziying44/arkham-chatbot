@@ -80,6 +80,8 @@ test("API key / 凭证环境变量拦截", () => {
 	const blocked = [
 		"echo $ANTHROPIC_API_KEY",
 		"echo ${OPENAI_API_KEY}",
+		"echo $MINIMAX_API_KEY",
+		"echo ${MINIMAX_API_KEY}",
 		"node -e 'console.log(process.env.QQ_APP_SECRET)'",
 	];
 	for (const cmd of blocked) {

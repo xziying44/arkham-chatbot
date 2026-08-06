@@ -7,6 +7,7 @@ import {
 	createSendImageTool,
 	createAskUserTool,
 	createSearchCardsTool,
+	createGenerateImageTool,
 	createLogger,
 	loadCardIndex,
 	loadSkillsFromDir,
@@ -56,6 +57,11 @@ export interface BotManagerOptions {
 	 * 未配置则 search_cards 不装配。
 	 */
 	readonly cardDatabaseDir?: string;
+	/**
+	 * MiniMax 文生图配置。配置了 apiKey 才装配 generate_image 工具。
+	 * key 仅注入工具闭包（宿主机进程内执行），不写入沙箱文件/环境变量。
+	 */
+	readonly minimax?: { readonly apiKey: string; readonly apiBase?: string };
 	/**
 	 * 启动时清除所有 scope 的对话历史（不注入 session.jsonl 到上下文）。
 	 * 用于：改了提示词/技能/系统配置后，避免旧上下文污染新行为。
@@ -370,6 +376,16 @@ export class BotManager {
 				// search_cards：索引加载成功才装配（优雅降级）。
 				if (this.opts.cardDatabaseDir && this.cardIndex.length > 0) {
 					tools.push(createSearchCardsTool({ databaseDir: this.opts.cardDatabaseDir }));
+				}
+				// generate_image：配置了 MiniMax key 才装配（优雅降级）。
+				// 工具在宿主机进程内调 API，key 不进沙箱；生成图落到 workspace/generated/，
+				// agent 用 send_image 发送（send_image 的 workspaceDir 边界允许该目录）。
+				if (this.opts.minimax) {
+					tools.push(createGenerateImageTool({
+						apiKey: this.opts.minimax.apiKey,
+						apiBase: this.opts.minimax.apiBase,
+						workspaceDir: `${this.botDataDir(config.id)}/${scope.kind}/${scope.id}/workspace`,
+					}));
 				}
 				return tools;
 			},

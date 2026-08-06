@@ -39,6 +39,15 @@ export interface AppConfig {
 	 * 未配置则 search_cards 不装配（优雅降级）。
 	 */
 	readonly cardDatabaseDir?: string;
+	/**
+	 * MiniMax 文生图（generate_image 工具）。配置了 apiKey 才装配该工具。
+	 * key 只存在于宿主机进程内存（由 .env 注入），不进沙箱——沙箱断网 + 命令护栏
+	 * 双重隔离，agent 只能拿到生成结果图。
+	 */
+	readonly minimax?: {
+		readonly apiKey: string;
+		readonly apiBase?: string;
+	};
 	/** 引导用的默认 persona（仅首次种库用）。 */
 	readonly persona?: string;
 	/** SQLite 数据库文件路径（机器人账号/设置/消息/日志）。 */
@@ -89,6 +98,10 @@ export function loadConfig(): AppConfig {
 		arkhamAssetsDir: optional("ARKHAM_ASSETS_DIR")
 			?? (arkhamWorkshopDir ? resolve(arkhamWorkshopDir, "assets") : undefined),
 		cardDatabaseDir: optional("CHATBOT_CARD_DATABASE_DIR"),
+		minimax: (() => {
+			const apiKey = optional("MINIMAX_API_KEY");
+			return apiKey ? { apiKey, apiBase: optional("MINIMAX_API_BASE") } : undefined;
+		})(),
 		qq: {
 			appId: optional("QQ_APP_ID") ?? "",
 			appSecret: optional("QQ_APP_SECRET") ?? "",

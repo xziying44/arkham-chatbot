@@ -116,11 +116,12 @@ export async function startApp(): Promise<AppRuntime> {
 
 	// 多机器人编排器。
 	// streamFn 策略：走 pi-ai 原生流式（streamSimple），带 2 分钟超时 + 3 次重试。
-	// DeepSeek 的 OpenAI 兼容端点流式模式正常（工具参数完整返回），
 	// pi-ai 按 baseUrl 自动检测 deepseek 兼容模式（thinkingFormat: "deepseek"），
 	// 正确分离 reasoning_content 与 content。
-	// 注意：DeepSeek 的 Anthropic 兼容端点在 stream + thinking + tool_use 时
-	// 有工具参数解析为空的 bug，所以用 OpenAI 端点而非 Anthropic 端点。
+	// 2026-08-06 实测：DeepSeek 的 Anthropic 兼容端点（api.deepseek.com/anthropic）
+	// 在 stream + thinking(off/low) + tool_use 下工具参数完整（scripts/smoke-generate-image.ts
+	// 双测试通过）；早先"anthropic 端点工具参数为空"的判断实为环境变量串 key
+	//（shell 的 ANTHROPIC_AUTH_TOKEN 覆盖了 .env 导致 401）。两个端点都可用。
 	const LLM_TIMEOUT_MS = 120_000;
 	const LLM_MAX_RETRIES = 3;
 	const nativeStreamFn = (model: Model<any>, context: any, options?: any) =>
@@ -144,6 +145,7 @@ export async function startApp(): Promise<AppRuntime> {
 		arkhamBinPath: config.arkhamBinPath,
 		arkhamAssetsDir: config.arkhamAssetsDir,
 		cardDatabaseDir: config.cardDatabaseDir,
+		minimax: config.minimax,
 		clearHistoryOnStart: config.clearHistoryOnStart,
 		logger: appLog,
 	});

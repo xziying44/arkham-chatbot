@@ -99,7 +99,7 @@ const DANGER_PATTERNS: readonly RegExp[] = [
 
 /** 禁止读取的环境变量名（防泄露 token/key）。 */
 const SENSITIVE_ENV_PATTERNS: readonly RegExp[] = [
-	/\$\{?(ANTHROPIC|OPENAI|DEEPSEEK|GLM|ZHIPU|ARK|VOLC)_(API_KEY|AUTH_TOKEN|SECRET|TOKEN)/i,
+	/\$\{?(ANTHROPIC|OPENAI|DEEPSEEK|GLM|ZHIPU|ARK|VOLC|MINIMAX)_(API_KEY|AUTH_TOKEN|SECRET|TOKEN)/i,
 	/\$\{?(QQ_APP_SECRET|ADMIN_PASSWORD|DATABASE_URL)/i,
 	/\bprocess\.env\b/, // node 读环境变量
 ];

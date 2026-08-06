@@ -15,6 +15,8 @@ export { createLoadSkillTool } from "./tools/load-skill.ts";
 export type { CreateLoadSkillToolOptions } from "./tools/load-skill.ts";
 export { createSearchCardsTool } from "./tools/search-cards.ts";
 export type { CreateSearchCardsToolOptions, SearchCardsInput } from "./tools/search-cards.ts";
+export { createGenerateImageTool, buildArtPrompt, typeDefaults } from "./tools/generate-image.ts";
+export type { CreateGenerateImageToolOptions, GenerateImageInput } from "./tools/generate-image.ts";
 export { loadCardIndex, searchCards } from "./tools/search-cards-index.ts";
 export type { IndexedCard, SearchParams, SearchResult } from "./tools/search-cards-index.ts";
 export { createRestrictedBashTool, reviewBashCommand } from "./tools/restricted-bash.ts";
