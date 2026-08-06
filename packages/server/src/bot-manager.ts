@@ -1,16 +1,19 @@
 import { mkdir, rm, writeFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Model, Models } from "@earendil-works/pi-ai";
-import type { StreamFn, Skill } from "@earendil-works/pi-agent-core";
+import type { StreamFn, Skill, AgentTool } from "@earendil-works/pi-agent-core";
 import {
 	SessionManager,
 	createSendImageTool,
 	createAskUserTool,
+	createSearchCardsTool,
 	createLogger,
+	loadCardIndex,
 	loadSkillsFromDir,
 	type Logger,
 	type ScopeKey,
 	type IncomingMessage,
+	type IndexedCard,
 } from "@arkham/chatbot-core";
 import { createExecutionEnv } from "@arkham/chatbot-sandbox";
 import { QQAdapter, type QQConnectionState } from "@arkham/chatbot-im-qq";
@@ -45,6 +48,13 @@ export interface BotManagerOptions {
 	/** arkham-cli 资产目录（宿主机绝对路径）。可选。 */
 	readonly arkhamAssetsDir?: string;
 	/**
+	 * 卡牌数据库根目录（宿主机绝对路径，含 json/ + card_images/）。
+	 * 配置后：①只读挂载到沙箱 cards-db/；②启动时加载索引供 search_cards 工具用；
+	 * ③加入 send_image 的 extraAllowedRoots（dev 模式 symlink 解析放行）。
+	 * 未配置则 search_cards 不装配。
+	 */
+	readonly cardDatabaseDir?: string;
+	/**
 	 * 启动时清除所有 scope 的对话历史（不注入 session.jsonl 到上下文）。
 	 * 用于：改了提示词/技能/系统配置后，避免旧上下文污染新行为。
 	 * memory.md（长期记忆）不受影响，仍会加载。
@@ -78,6 +88,8 @@ export class BotManager {
 	private readonly opts: BotManagerOptions;
 	/** 启动时从 skillsDir 加载的技能清单（所有会话共享）。 */
 	private skills: Skill[] = [];
+	/** 启动时从 cardDatabaseDir 加载的卡牌索引（所有会话共享，供 search_cards）。 */
+	private cardIndex: IndexedCard[] = [];
 
 	constructor(opts: BotManagerOptions) {
 		this.opts = opts;
@@ -105,6 +117,15 @@ export class BotManager {
 			}
 		} catch (error) {
 			this.log.warn("技能目录加载失败，技能不可用", { dir: this.opts.skillsDir, error: (error as Error).message });
+		}
+		// 可选：加载卡牌数据库索引（search_cards 工具用）。失败不阻断启动，工具不装配。
+		if (this.opts.cardDatabaseDir) {
+			try {
+				this.cardIndex = await loadCardIndex(this.opts.cardDatabaseDir, "cards-db");
+				this.log.info("卡牌数据库索引已加载", { dir: this.opts.cardDatabaseDir, count: this.cardIndex.length });
+			} catch (error) {
+				this.log.warn("卡牌数据库索引加载失败，search_cards 不可用", { dir: this.opts.cardDatabaseDir, error: (error as Error).message });
+			}
 		}
 		for (const cfg of configs) {
 			if (!cfg.enabled) {
@@ -301,6 +322,7 @@ export class BotManager {
 					// - 技能源目录 → workspace/skills/（agent 用 read 读 SKILL.md + 附件）
 					// - arkham-cli 资产 → workspace/.arkham/assets（DIY 卡图技能用）
 					// - arkham-cli 二进制 → workspace/.arkham/bin/arkham-cli（单文件 ro-bind）
+					// - 卡牌数据库 → workspace/cards-db/（search_cards 工具查询 + 发图）
 					// 用 workspace 下的相对路径而非 /opt/arkham/，避免 macOS 开发模式下
 					// /opt 不可写的权限问题。bwrap 的 --ro-bind 支持嵌套在 rw workspace 内。
 					readOnlyBinds: [
@@ -308,31 +330,44 @@ export class BotManager {
 						[this.opts.skillsDir, `${workspaceDir}/skills`],
 						...(this.opts.arkhamAssetsDir ? [[this.opts.arkhamAssetsDir, `${workspaceDir}/.arkham/assets`] as const] : []),
 						...(this.opts.arkhamBinPath ? [[this.opts.arkhamBinPath, `${workspaceDir}/.arkham/bin/arkham-cli`] as const] : []),
+						...(this.opts.cardDatabaseDir ? [[this.opts.cardDatabaseDir, `${workspaceDir}/cards-db`] as const] : []),
 					],
 				}),
 			ttlMs: this.opts.sessionTtlMs,
 			reaperIntervalMs: this.opts.reaperIntervalMs,
 			persona: config.persona ?? undefined,
 			skills: this.skills,
-			extraToolsFactory: (scope, getReplyToMsgId, _workspaceDir, pendingAskHolder) => [
-				createSendImageTool({
-					scopeId: scope.id,
-					getReplyToMsgId,
-					workspaceDir: `${this.botDataDir(config.id)}/${scope.kind}/${scope.id}/workspace`,
-					send: async (scopeId, filePath, replyToMsgId) => {
-						const scopeKey: ScopeKey = { kind: scope.kind, id: scopeId };
-						await adapter.sendImage(scopeKey, filePath, replyToMsgId);
-					},
-				}),
-				createAskUserTool({
-					getReplyToMsgId,
-					pendingAskHolder,
-					scopeKind: scope.kind,
-					sendKeyboard: async (content, keyboard, replyToMsgId) => {
-						await adapter.sendKeyboard?.(scope, content, keyboard, replyToMsgId);
-					},
-				}),
-			],
+			extraToolsFactory: (scope, getReplyToMsgId, _workspaceDir, pendingAskHolder) => {
+				// send_image 的额外允许根：卡牌数据库目录。
+				// 开发模式 macOS 下 cards-db 是 symlink → realpath 解析到宿主路径（workspace 外），
+				// 需白名单放行；生产 bwrap 下挂载点在 workspace 内，自然通过。
+				const extraAllowedRoots = this.opts.cardDatabaseDir ? [this.opts.cardDatabaseDir] : undefined;
+				const tools: AgentTool[] = [
+					createSendImageTool({
+						scopeId: scope.id,
+						getReplyToMsgId,
+						workspaceDir: `${this.botDataDir(config.id)}/${scope.kind}/${scope.id}/workspace`,
+						extraAllowedRoots,
+						send: async (scopeId, filePath, replyToMsgId) => {
+							const scopeKey: ScopeKey = { kind: scope.kind, id: scopeId };
+							await adapter.sendImage(scopeKey, filePath, replyToMsgId);
+						},
+					}),
+					createAskUserTool({
+						getReplyToMsgId,
+						pendingAskHolder,
+						scopeKind: scope.kind,
+						sendKeyboard: async (content, keyboard, replyToMsgId) => {
+							await adapter.sendKeyboard?.(scope, content, keyboard, replyToMsgId);
+						},
+					}),
+				];
+				// search_cards：索引加载成功才装配（优雅降级）。
+				if (this.opts.cardDatabaseDir && this.cardIndex.length > 0) {
+					tools.push(createSearchCardsTool({ databaseDir: this.opts.cardDatabaseDir }));
+				}
+				return tools;
+			},
 			// 中间消息：agent 在工具调用之间输出的文字立即发送，像真人边想边说。
 			onIntermediateText: (scope, text, replyToMessageId) => {
 				void adapter.sendText(scope, text, replyToMessageId).catch(() => {});

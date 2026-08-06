@@ -32,6 +32,16 @@ export interface CreateSendImageToolOptions {
 	 * 防止 agent 越界访问沙箱外文件。未提供则不限制（仅开发/调试用）。
 	 */
 	readonly workspaceDir?: string;
+	/**
+	 * 额外允许发图的宿主机根目录（绝对路径）。
+	 *
+	 * 用途：readOnlyBinds 挂载的目录（如卡牌数据库）在生产 bwrap 下是 workspace
+	 * 内的真实挂载点，realpath 检查自然通过；但开发模式 macOS 下挂载点是 symlink，
+	 * realpath 会解析到宿主真实路径（workspace 外），导致边界检查误拒。
+	 * 把这些挂载源的宿主路径加入此白名单，让发图在两种模式下都正常工作。
+	 * 安全性：只放行显式配置的目录，不放宽任意路径。
+	 */
+	readonly extraAllowedRoots?: readonly string[];
 }
 
 /**
@@ -53,15 +63,19 @@ export function createSendImageTool(opts: CreateSendImageToolOptions): AgentTool
 			const resolvedPath = opts.workspaceDir
 				? resolve(opts.workspaceDir, filePath)
 				: resolve(filePath);
-			// 硬边界：只允许发送沙箱工作目录内的图片。
+			// 硬边界：只允许发送沙箱工作目录内的图片，或 extraAllowedRoots 白名单根内的图片。
 			// 用 realpath 解析符号链接（防 link 逃逸到沙箱外），再做严格的目录包含判断
 			// （防字符串前缀误判：/data/x 不是 /data/xyz 的子目录）。
+			// extraAllowedRoots 解决：开发模式 macOS 下 readOnlyBinds 是 symlink，
+			// realpath 解析到宿主真实路径（workspace 外），需白名单放行配置过的挂载源。
 			if (opts.workspaceDir) {
 				const wsReal = await realpath(opts.workspaceDir).catch(() => null);
 				const fileReal = await realpath(resolvedPath).catch(() => null);
 				const wsPrefix = wsReal?.endsWith(sep) ? wsReal : `${wsReal}${sep}`;
-				const inside = wsReal != null && fileReal != null && (fileReal === wsReal || fileReal.startsWith(wsPrefix));
-				if (!inside) {
+				const insideWorkspace = wsReal != null && fileReal != null && (fileReal === wsReal || fileReal.startsWith(wsPrefix));
+				// 检查 extraAllowedRoots（每个根也 realpath 解析后比较）。
+				const insideExtra = fileReal != null && await isUnderAnyRoot(fileReal, opts.extraAllowedRoots);
+				if (!insideWorkspace && !insideExtra) {
 					return {
 						content: [{ type: "text", text: `错误：${filePath} 不在工作目录内，无法发送。只能发送工作目录内的图片。` }],
 						details: undefined,
@@ -91,3 +105,19 @@ export function createSendImageTool(opts: CreateSendImageToolOptions): AgentTool
 		},
 	};
 }
+
+/**
+ * 判断 fileReal（已 realpath 解析的绝对路径）是否落在任一白名单根目录内。
+ * 每个根也 realpath 解析后做严格的目录包含判断（防前缀误判）。
+ */
+async function isUnderAnyRoot(fileReal: string, roots?: readonly string[]): Promise<boolean> {
+	if (!roots || roots.length === 0) return false;
+	for (const r of roots) {
+		const rootReal = await realpath(r).catch(() => null);
+		if (rootReal == null) continue;
+		const rootPrefix = rootReal.endsWith(sep) ? rootReal : `${rootReal}${sep}`;
+		if (fileReal === rootReal || fileReal.startsWith(rootPrefix)) return true;
+	}
+	return false;
+}
+

@@ -139,6 +139,7 @@ export async function startApp(): Promise<AppRuntime> {
 		skillsDir: config.skillsDir,
 		arkhamBinPath: config.arkhamBinPath,
 		arkhamAssetsDir: config.arkhamAssetsDir,
+		cardDatabaseDir: config.cardDatabaseDir,
 		clearHistoryOnStart: config.clearHistoryOnStart,
 		logger: appLog,
 	});

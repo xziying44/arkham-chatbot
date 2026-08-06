@@ -31,6 +31,12 @@ export interface AppConfig {
 	readonly arkhamBinPath?: string;
 	/** arkham-workshop 资产目录（字体/图片/cardback）。可选。 */
 	readonly arkhamAssetsDir?: string;
+	/**
+	 * 卡牌数据库根目录（宿主机绝对路径，含 json/ + card_images/）。
+	 * 配置后 search_cards 工具可用，并只读挂载到沙箱 cards-db/ 供 agent 查询/发图。
+	 * 未配置则 search_cards 不装配（优雅降级）。
+	 */
+	readonly cardDatabaseDir?: string;
 	/** 引导用的默认 persona（仅首次种库用）。 */
 	readonly persona?: string;
 	/** SQLite 数据库文件路径（机器人账号/设置/消息/日志）。 */
@@ -80,6 +86,7 @@ export function loadConfig(): AppConfig {
 			?? (arkhamWorkshopDir ? resolve(arkhamWorkshopDir, "target/release/arkham-cli") : undefined),
 		arkhamAssetsDir: optional("ARKHAM_ASSETS_DIR")
 			?? (arkhamWorkshopDir ? resolve(arkhamWorkshopDir, "assets") : undefined),
+		cardDatabaseDir: optional("CHATBOT_CARD_DATABASE_DIR"),
 		qq: {
 			appId: optional("QQ_APP_ID") ?? "",
 			appSecret: optional("QQ_APP_SECRET") ?? "",
