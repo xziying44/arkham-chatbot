@@ -30,6 +30,8 @@ export interface ResolvedSettings {
 	readonly model: string;
 	readonly anthropicBaseUrl?: string;
 	readonly openaiBaseUrl?: string;
+	/** 思考程度: off/low/medium/high/max。off=关闭思考，其余=开启并对应 effort。 */
+	readonly thinkingLevel: string;
 	readonly sessionTtlMs: number;
 	readonly reaperIntervalMs: number;
 	readonly sandbox: SandboxConfig;
@@ -42,6 +44,7 @@ export function resolveSettings(config: AppConfig, db: DatabaseSync): ResolvedSe
 		model: s.getOr(SettingsKeys.llmModel, config.model),
 		anthropicBaseUrl: s.get(SettingsKeys.llmAnthropicBaseUrl) ?? config.llm.anthropicBaseUrl,
 		openaiBaseUrl: s.get(SettingsKeys.llmOpenaiBaseUrl) ?? config.llm.openaiBaseUrl,
+		thinkingLevel: s.getOr(SettingsKeys.thinkingLevel, config.thinkingLevel),
 		sessionTtlMs: s.getInt(SettingsKeys.sessionTtlMs, config.session.ttlMs),
 		reaperIntervalMs: config.session.reaperIntervalMs, // 不在管理端改，用 env
 		sandbox: {
@@ -135,6 +138,7 @@ export async function startApp(): Promise<AppRuntime> {
 		sandbox: settings.sandbox,
 		sessionTtlMs: settings.sessionTtlMs,
 		reaperIntervalMs: settings.reaperIntervalMs,
+		thinkingLevel: settings.thinkingLevel,
 		messages,
 		skillsDir: config.skillsDir,
 		arkhamBinPath: config.arkhamBinPath,
@@ -190,6 +194,15 @@ export function buildModels(settings: ResolvedSettings): { models: Models; model
 		(models as ReturnType<typeof createModels>).setProvider(provider);
 	}
 
+	// 思考程度控制（thinkingLevel: off/low/medium/high/max）：
+	// Model.reasoning 必须为 true，pi-ai 才会处理 thinking 参数。thinkingLevel 是真正的
+	// 开关——off 时 pi-ai 显式发 thinking:disabled（Anthropic）/thinking:{type:disabled}
+	//（OpenAI DeepSeek），其它值发对应的 effort。若 reasoning=false，pi-ai 整个 thinking
+	// 块跳过 → 不发 thinking 参数 → DeepSeek 用模型默认（=开思考 high），反而关不掉。
+	// 所以 reasoning 一律 true（DeepSeek 是思考模型），thinkingLevel 控制开关 + 程度。
+	// 实际的 thinkingLevel 通过 Agent.initialState.thinkingLevel 传给 pi-ai（见 BotManager）。
+	const reasoningEnabled = true;
+
 	if (settings.anthropicBaseUrl) {
 		const { provider: providerId, modelId } = parseModelSpec(settings.model);
 		if (providerId === "anthropic") {
@@ -200,7 +213,7 @@ export function buildModels(settings: ResolvedSettings): { models: Models; model
 				api: "anthropic-messages",
 				provider: "anthropic",
 				baseUrl: settings.anthropicBaseUrl,
-				reasoning: false,
+				reasoning: reasoningEnabled,
 				input: ["text", "image"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 1_000_000,
@@ -226,19 +239,19 @@ export function buildModels(settings: ResolvedSettings): { models: Models; model
 	if (settings.openaiBaseUrl) {
 		const { provider: providerId, modelId } = parseModelSpec(settings.model);
 		if (providerId === "openai") {
-			// DeepSeek 端点是思考模型（reasoning: true），pi-ai 据此启用 thinking 处理
-			const isDeepSeek = settings.openaiBaseUrl.includes("deepseek.com");
+			// thinkingLevel 控制开关与程度；reasoning=true 让 pi-ai 处理 thinking 参数。
+			//（非思考模型如 GPT-4o 设了 reasoning=true 也无害——pi-ai 不发 thinking 参数）
 			const customModel: Model<"openai-completions"> = {
 				id: modelId,
 				name: modelId,
 				api: "openai-completions",
 				provider: "openai",
 				baseUrl: settings.openaiBaseUrl,
-				reasoning: isDeepSeek,
+				reasoning: reasoningEnabled,
 				input: ["text", "image"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 1_000_000,
-				maxTokens: isDeepSeek ? 8192 : 8192,
+				maxTokens: 8192,
 			};
 			const customProvider = createProvider({
 				id: "openai",

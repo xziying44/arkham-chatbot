@@ -31,6 +31,7 @@ export function bootstrapIfEmpty(db: DatabaseSync, config: AppConfig): void {
 	// LLM / 会话 / 沙箱默认值：始终写一次（已存在的不覆盖，保留用户在管理端的改动）。
 	const defaults = {
 		[SettingsKeys.llmModel]: config.model,
+		[SettingsKeys.thinkingLevel]: config.thinkingLevel,
 		[SettingsKeys.sessionTtlMs]: String(config.session.ttlMs),
 		[SettingsKeys.sandboxEnabled]: String(config.sandbox.enabled),
 		[SettingsKeys.sandboxNetworkDisabled]: String(config.sandbox.networkDisabled),

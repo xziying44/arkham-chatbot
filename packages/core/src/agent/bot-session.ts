@@ -1,4 +1,4 @@
-import { type AgentMessage, type AgentTool, type Skill, formatSkillsForSystemPrompt, Agent, type StreamFn } from "@earendil-works/pi-agent-core";
+import { type AgentMessage, type AgentTool, type Skill, formatSkillsForSystemPrompt, Agent, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
@@ -29,6 +29,8 @@ export interface BotSessionOptions {
 	readonly model: Model<any>;
 	readonly streamFn: StreamFn;
 	readonly env: ExecutionEnv;
+	/** 思考程度: off/low/medium/high/max。控制 Agent 的 thinkingLevel。 */
+	readonly thinkingLevel?: string;
 	readonly persona?: string;
 	/** 额外的自定义工具（在默认 bash/read/edit/write 之上）。 */
 	readonly extraTools?: AgentTool[];
@@ -132,6 +134,10 @@ export class ChatBotSession {
 				model: this.opts.model,
 				tools: this.tools,
 				messages: previousMessages,
+				// thinkingLevel 控制思考开关与强度：off=关闭，low/medium/high/max=对应 effort。
+				// 默认 "off"；pi-ai 据此 + Model.reasoning 决定发给 LLM 的 thinking 参数。
+				// 从 settings 传来的是 string，这里窄化为 ThinkingLevel 联合类型。
+				thinkingLevel: (this.opts.thinkingLevel ?? "off") as ThinkingLevel,
 			},
 			streamFn: this.opts.streamFn,
 		});

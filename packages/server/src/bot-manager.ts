@@ -39,6 +39,8 @@ export interface BotManagerOptions {
 	readonly sandbox: SandboxConfig;
 	readonly sessionTtlMs: number;
 	readonly reaperIntervalMs: number;
+	/** 思考程度: off/low/medium/high/max。传给 Agent 控制思考开关与强度。 */
+	readonly thinkingLevel?: string;
 	/** 消息流水仓库（路由器入站/出站落库用）。可选。 */
 	readonly messages?: MessageRepository;
 	/** 技能源文件目录（宿主机绝对路径）。启动时加载，注入所有会话。 */
@@ -335,6 +337,7 @@ export class BotManager {
 				}),
 			ttlMs: this.opts.sessionTtlMs,
 			reaperIntervalMs: this.opts.reaperIntervalMs,
+			thinkingLevel: this.opts.thinkingLevel,
 			persona: config.persona ?? undefined,
 			skills: this.skills,
 			extraToolsFactory: (scope, getReplyToMsgId, _workspaceDir, pendingAskHolder) => {

@@ -22,6 +22,8 @@ export interface AppConfig {
 	readonly session: { ttlMs: number; reaperIntervalMs: number };
 	/** 启动时清除所有 scope 的对话历史（改配置后避免旧上下文污染）。 */
 	readonly clearHistoryOnStart: boolean;
+	/** 思考程度默认值: off/low/medium/high/max。管理端可改。 */
+	readonly thinkingLevel: string;
 	readonly sandbox: { enabled: boolean; networkDisabled: boolean; timeoutSeconds: number };
 	/** 运行时数据根目录（机器人工作区、session.jsonl、memory.md）。 */
 	readonly dataDir: string;
@@ -102,6 +104,7 @@ export function loadConfig(): AppConfig {
 			reaperIntervalMs: int("CHATBOT_REAPER_INTERVAL_MS", 60_000),
 		},
 		clearHistoryOnStart: bool("CHATBOT_CLEAR_HISTORY_ON_START", false),
+		thinkingLevel: optional("CHATBOT_THINKING_LEVEL") ?? "low",
 		sandbox: {
 			enabled: bool("CHATBOT_SANDBOX_ENABLED", true),
 			networkDisabled: bool("CHATBOT_SANDBOX_NETWORK_DISABLED", true),

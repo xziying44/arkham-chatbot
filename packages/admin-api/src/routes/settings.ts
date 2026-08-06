@@ -15,6 +15,8 @@ interface SettingsRoutesDeps {
 const EDITABLE = [
 	SettingsKeys.llmModel,
 	SettingsKeys.llmAnthropicBaseUrl,
+	SettingsKeys.llmOpenaiBaseUrl,
+	SettingsKeys.thinkingLevel,
 	SettingsKeys.sessionTtlMs,
 	SettingsKeys.sandboxEnabled,
 	SettingsKeys.sandboxNetworkDisabled,

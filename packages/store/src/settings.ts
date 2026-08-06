@@ -7,6 +7,7 @@ import type { DatabaseSync } from "./db.ts";
  *   llm_model                       — "<provider>/<model-id>"
  *   llm_anthropic_base_url          — 自定义 Anthropic 兼容端点（可选）
  *   llm_openai_base_url             — 自定义 OpenAI Chat Completions 兼容端点（可选）
+ *   thinking_level                  — 思考程度: off/low/medium/high/max
  *   session_ttl_ms                  — 会话回收阈值（毫秒）
  *   sandbox_enabled                 — "true"|"false"
  *   sandbox_network_disabled        — "true"|"false"
@@ -19,6 +20,7 @@ export const SettingsKeys = {
 	llmModel: "llm_model",
 	llmAnthropicBaseUrl: "llm_anthropic_base_url",
 	llmOpenaiBaseUrl: "llm_openai_base_url",
+	thinkingLevel: "thinking_level",
 	sessionTtlMs: "session_ttl_ms",
 	sandboxEnabled: "sandbox_enabled",
 	sandboxNetworkDisabled: "sandbox_network_disabled",

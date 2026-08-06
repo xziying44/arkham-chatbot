@@ -26,6 +26,8 @@ export interface SessionManagerOptions {
 	readonly ttlMs?: number;
 	/** 回收器扫描间隔（毫秒），默认 1 分钟。 */
 	readonly reaperIntervalMs?: number;
+	/** 思考程度: off/low/medium/high/max。传给 Agent 控制思考开关与强度。 */
+	readonly thinkingLevel?: string;
 	/** 机器人人设（所有 scope 共享）。 */
 	readonly persona?: string;
 	/** 已加载的技能清单（所有 scope 共享，filePath 已重写为沙箱内路径）。 */
@@ -78,8 +80,8 @@ interface ActiveEntry {
  * 4. **断电续传**：磁盘上的 memory.md / session.jsonl 让下次激活恢复上下文。
  */
 export class SessionManager {
-	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage" | "onAttachment">> &
-		Pick<SessionManagerOptions, "persona" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage" | "onAttachment">;
+	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage" | "onAttachment">> &
+		Pick<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage" | "onAttachment">;
 	private readonly active = new Map<string, ActiveEntry>();
 	private reaperTimer: ReturnType<typeof setInterval> | undefined;
 	private shuttingDown = false;
@@ -94,6 +96,7 @@ export class SessionManager {
 			envFactory: opts.envFactory,
 			ttlMs,
 			reaperIntervalMs: opts.reaperIntervalMs ?? 60_000,
+			thinkingLevel: opts.thinkingLevel,
 			persona: opts.persona,
 			skills: opts.skills,
 			extraToolsFactory: opts.extraToolsFactory,
@@ -205,6 +208,7 @@ export class SessionManager {
 			model: this.opts.model,
 			streamFn: this.opts.streamFn,
 			env,
+			thinkingLevel: this.opts.thinkingLevel,
 			persona: this.opts.persona,
 			skills: this.opts.skills,
 			extraTools,

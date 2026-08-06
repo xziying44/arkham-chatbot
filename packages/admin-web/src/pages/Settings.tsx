@@ -228,6 +228,7 @@ export default function SettingsPage() {
           layout="vertical"
           onFinish={save}
           initialValues={{
+            thinking_level: settings.thinking_level || "low",
             session_ttl_ms: Number(settings.session_ttl_ms),
             sandbox_enabled: settings.sandbox_enabled === "true",
             sandbox_network_disabled: settings.sandbox_network_disabled === "true",
@@ -235,6 +236,21 @@ export default function SettingsPage() {
           }}
           key={JSON.stringify(settings) + "-runtime"}
         >
+          <Form.Item
+            label="思考程度"
+            name="thinking_level"
+            tooltip="控制推理模型（如 DeepSeek）的思考强度。off=关闭思考（最快），low/medium/high/max=开启并逐渐加强。群聊场景建议 low（兼顾速度与质量）。改后需重启或回收会话生效。"
+          >
+            <Select
+              options={[
+                { value: "off", label: "关闭（最快，不思考）" },
+                { value: "low", label: "低（推荐，快+轻度思考）" },
+                { value: "medium", label: "中" },
+                { value: "high", label: "高（慢但更深思熟虑）" },
+                { value: "max", label: "最高" },
+              ]}
+            />
+          </Form.Item>
           <Form.Item label="会话回收阈值（毫秒）" name="session_ttl_ms" rules={[{ required: true }]}>
             <InputNumber min={60000} style={{ width: "100%" }} />
           </Form.Item>
