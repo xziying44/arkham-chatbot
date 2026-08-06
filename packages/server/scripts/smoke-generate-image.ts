@@ -150,9 +150,9 @@ async function main(): Promise<void> {
 		? await (await import("node:fs/promises")).readdir(diyGeneratedDir)
 		: [];
 	const cardRendered = diyImages.some((p) => /cards[/\\]out[/\\].*\.png$/.test(p) && existsSync(p));
-	const artUsedAsPicture = existsSync(resolve(diyWsDir, "cards/in/000.card"))
-		&& (await import("node:fs/promises")).readFile(resolve(diyWsDir, "cards/in/000.card"), "utf8")
-			.then((c) => c.includes("generated/"));
+	const cardJsonPath = resolve(diyWsDir, "cards/in/000.card");
+	const artUsedAsPicture = existsSync(cardJsonPath)
+		&& (await (await import("node:fs/promises")).readFile(cardJsonPath, "utf8")).includes("generated/");
 	let pass = true;
 	if (generatedImages.length > 0) {
 		console.log(`[smoke] 测试1 PASS ✅`);
@@ -160,14 +160,15 @@ async function main(): Promise<void> {
 		console.error("[smoke] 测试1 FAIL ❌ agent 没有完成「生成 → 发图」闭环");
 		pass = false;
 	}
-	if (diyGenerated.length > 0 && cardRendered && (await artUsedAsPicture)) {
+	if (diyGenerated.length > 0 && cardRendered && artUsedAsPicture) {
 		console.log(`[smoke] 测试2 PASS ✅ 无图制卡自动画插画（generate_image ${diyGenerated.length} 张 → picture_path 引用 → 卡图渲染发送）`);
 	} else {
-		console.error(`[smoke] 测试2 FAIL ❌ diy 自动插画闭环不完整: generated=${diyGenerated.length} rendered=${cardRendered} pictureRef=${await artUsedAsPicture}`);
+		console.error(`[smoke] 测试2 FAIL ❌ diy 自动插画闭环不完整: generated=${diyGenerated.length} rendered=${cardRendered} pictureRef=${artUsedAsPicture}`);
 		pass = false;
 	}
 	if (!pass) process.exit(1);
 	console.log("[smoke] 全部通过 ✅");
+	console.log(`[smoke] 产物保留在 ${DATA_DIR}（调试用，可手动删除）`);
 }
 
 await main();

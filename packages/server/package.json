@@ -13,7 +13,8 @@
     "start": "node --env-file=.env dist/bin.js",
     "dev": "node --env-file=.env --import tsx src/bin.ts",
     "smoke": "node --import tsx scripts/smoke.ts",
-    "test": "echo \"no tests yet\""
+    "test": "echo \"no tests yet\"",
+    "smoke:genimg": "node --env-file=../../.env --import tsx scripts/smoke-generate-image.ts"
   },
   "dependencies": {
     "@arkham/chatbot-core": "workspace:*",

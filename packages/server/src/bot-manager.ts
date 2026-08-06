@@ -346,7 +346,7 @@ export class BotManager {
 			thinkingLevel: this.opts.thinkingLevel,
 			persona: config.persona ?? undefined,
 			skills: this.skills,
-			extraToolsFactory: (scope, getReplyToMsgId, _workspaceDir, pendingAskHolder) => {
+			extraToolsFactory: (scope, getReplyToMsgId, workspaceDir, pendingAskHolder) => {
 				// send_image 的路径映射：cards-db（沙箱内挂载点）→ 宿主真实数据库目录。
 				// 生产 bwrap 下 cards-db 只是容器内挂载点，宿主进程看不到该路径，必须映射回
 				// 宿主真实目录才能读到卡图文件并发送。
@@ -357,7 +357,7 @@ export class BotManager {
 					createSendImageTool({
 						scopeId: scope.id,
 						getReplyToMsgId,
-						workspaceDir: `${this.botDataDir(config.id)}/${scope.kind}/${scope.id}/workspace`,
+						workspaceDir,
 						pathMappings,
 						send: async (scopeId, filePath, replyToMsgId) => {
 							const scopeKey: ScopeKey = { kind: scope.kind, id: scopeId };
@@ -384,7 +384,7 @@ export class BotManager {
 					tools.push(createGenerateImageTool({
 						apiKey: this.opts.minimax.apiKey,
 						apiBase: this.opts.minimax.apiBase,
-						workspaceDir: `${this.botDataDir(config.id)}/${scope.kind}/${scope.id}/workspace`,
+						workspaceDir,
 					}));
 				}
 				return tools;

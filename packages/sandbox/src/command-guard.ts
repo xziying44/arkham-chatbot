@@ -102,6 +102,8 @@ const SENSITIVE_ENV_PATTERNS: readonly RegExp[] = [
 	/\$\{?(ANTHROPIC|OPENAI|DEEPSEEK|GLM|ZHIPU|ARK|VOLC|MINIMAX)_(API_KEY|AUTH_TOKEN|SECRET|TOKEN)/i,
 	/\$\{?(QQ_APP_SECRET|ADMIN_PASSWORD|DATABASE_URL)/i,
 	/\bprocess\.env\b/, // node 读环境变量
+	/\bENVIRON\s*\[/, // awk 'BEGIN{print ENVIRON["..."]}' 绕过
+	/\/proc\/(self|\d+)\/environ/i, // cat /proc/self/environ 绕过
 ];
 
 const ALL_PATTERNS: ReadonlyArray<{ name: string; patterns: readonly RegExp[]; reason: string }> = [

@@ -1,5 +1,6 @@
 import type { ExecutionEnv, ShellExecOptions } from "@earendil-works/pi-agent-core";
 import { reviewCommand } from "./command-guard.ts";
+import { sanitizeShellEnv } from "./sanitize-shell-env.ts";
 
 /**
  * 命令审查包装器：在任何 {@link ExecutionEnv} 之上拦截 exec，执行前先过安全审查。
@@ -35,7 +36,14 @@ export class GuardedExecutionEnv implements ExecutionEnv {
 				},
 			});
 		}
-		return this.inner.exec(command, options);
+		return this.inner.exec(command, {
+			...options,
+			// 敏感环境变量（API key/token/secret）物理剔除，不随 process.env 进沙箱。
+			// 护栏正则只是第二层——可绕过（awk ENVIRON / /proc/self/environ），这里根治。
+			// 调用方显式传的 options.env 原样附加（由调用方自己负责）。
+			inheritEnv: false,
+			env: { ...sanitizeShellEnv(), ...options?.env },
+		});
 	}
 
 	// ---- 文件系统方法：透传 ----

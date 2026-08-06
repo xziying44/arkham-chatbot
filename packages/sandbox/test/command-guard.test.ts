@@ -83,6 +83,10 @@ test("API key / 凭证环境变量拦截", () => {
 		"echo $MINIMAX_API_KEY",
 		"echo ${MINIMAX_API_KEY}",
 		"node -e 'console.log(process.env.QQ_APP_SECRET)'",
+		// 绕过护栏正就读取进程环境的已知手法（即使 env 已净化，护栏也应认识这些模式）
+		`awk 'BEGIN{print ENVIRON["MINIMAX_API_KEY"]}'`,
+		"cat /proc/self/environ",
+		"cat /proc/1/environ",
 	];
 	for (const cmd of blocked) {
 		const d = reviewCommand(cmd);

@@ -156,9 +156,10 @@ export function createGenerateImageTool(
 		label: "generate_image",
 		description:
 			"生成诡镇奇谭风格的卡牌插画（MiniMax 文生图，欧美写实油画/克苏鲁氛围）。" +
-			"用户想「画一张…/配个插画/来张图」时调用：先按公式把用户需求改写成画面描述，选好类型，" +
-			"生成后用 send_image 把图片发给用户（默认出 2 张，一起发，让用户挑）。" +
-			"注意：一次对话只生图一次；用户对结果不满意要重画时，按反馈调整画面描述后再调（如太亮→追加「夜色，唯一光源是××」）。",
+			"用户想「画一张…/配个插画/来张图」时调用：先按公式把用户需求改写成画面描述，选好类型。" +
+			"生成后的处理按当前任务上下文走：用户直接求画 → 用 send_image 把图发给用户；" +
+			"制卡场景 → 按 diy-card 技能指引用作卡图插画（不直接发原图）。" +
+			"用户对结果不满意要重画时，按反馈调整画面描述后再调（如太亮→追加「夜色，唯一光源是××」）。",
 		parameters: generateImageSchema,
 		async execute(_toolCallId, params, signal, _onUpdate) {
 			const type = params.type as CardArtType;
@@ -207,7 +208,9 @@ export function createGenerateImageTool(
 			// 下载到 workspace/generated/（沙箱内可见为 generated/）。
 			const outDir = join(opts.workspaceDir, "generated");
 			await mkdir(outDir, { recursive: true });
-			const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+			// 时间戳到毫秒 + 序号，同一秒多次调用不互相覆盖。
+			const now = new Date();
+			const stamp = now.toISOString().replace(/[-:T]/g, "").slice(0, 14) + String(now.getMilliseconds()).padStart(3, "0");
 			const saved: string[] = [];
 			for (let i = 0; i < urls.length; i++) {
 				try {
@@ -271,6 +274,9 @@ async function requestImageGeneration(
 	}
 }
 
+/** 单张图下载上限（防御性：异常响应不撑爆内存）。 */
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
 /** 下载临时 URL 的图片内容。 */
 async function download(url: string, timeoutMs: number, signal?: AbortSignal): Promise<Buffer> {
 	const controller = new AbortController();
@@ -279,7 +285,13 @@ async function download(url: string, timeoutMs: number, signal?: AbortSignal): P
 	try {
 		const resp = await fetch(url, { signal: controller.signal });
 		if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-		return Buffer.from(await resp.arrayBuffer());
+		const contentType = resp.headers.get("content-type") ?? "";
+		if (!contentType.startsWith("image/")) throw new Error(`响应不是图片（Content-Type: ${contentType || "未知"}）`);
+		const declared = Number(resp.headers.get("content-length") ?? 0);
+		if (declared > MAX_IMAGE_BYTES) throw new Error(`图片过大（${Math.round(declared / 1024 / 1024)}MB）`);
+		const buf = Buffer.from(await resp.arrayBuffer());
+		if (buf.length > MAX_IMAGE_BYTES) throw new Error(`图片过大（${Math.round(buf.length / 1024 / 1024)}MB）`);
+		return buf;
 	} finally {
 		clearTimeout(timer);
 	}
