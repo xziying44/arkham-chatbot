@@ -103,7 +103,14 @@ export class QQWebSocketReceiver extends EventEmitter {
 	}
 
 	private async connect(): Promise<void> {
-		const gateway = await this.client.getGateway();
+		let gateway;
+		try {
+			gateway = await this.client.getGateway();
+		} catch (error) {
+			// getGateway 失败（如限频 100017、网络问题）不崩溃进程，
+			// 抛出后由调用方（reconnect）的 catch 处理退避重试。
+			throw new Error(`connect: getGateway 失败: ${(error as Error).message}`);
+		}
 		const ws = new WebSocket(gateway.url);
 		this.ws = ws;
 
@@ -122,34 +129,39 @@ export class QQWebSocketReceiver extends EventEmitter {
 		const payload = this.parse(event.data);
 		if (!payload) return;
 
-		switch (payload.op) {
-			case OpCode.HELLO: {
-				const d = payload.d as HelloData | undefined;
-				this.heartbeatInterval = d?.heartbeat_interval ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
-				await this.identify();
-				break;
+		try {
+			switch (payload.op) {
+				case OpCode.HELLO: {
+					const d = payload.d as HelloData | undefined;
+					this.heartbeatInterval = d?.heartbeat_interval ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+					await this.identify();
+					break;
+				}
+				case OpCode.HEARTBEAT_ACK: {
+					this.scheduleHeartbeat();
+					break;
+				}
+				case OpCode.DISPATCH: {
+					if (typeof payload.s === "number") this.lastSeq = payload.s;
+					// 去重：QQ 在重连/网络抖动时会重放已推送事件（相同 seq 或事件 id），
+					// 不去重会导致同一条用户消息被处理多次、回复多条。
+					if (this.isDuplicate(payload)) break;
+					this.dispatch(payload);
+					break;
+				}
+				case OpCode.RECONNECT: {
+					await this.reconnect();
+					break;
+				}
+				case OpCode.INVALID_SESSION: {
+					// 重新 IDENTIFY。
+					await this.reconnect();
+					break;
+				}
 			}
-			case OpCode.HEARTBEAT_ACK: {
-				this.scheduleHeartbeat();
-				break;
-			}
-			case OpCode.DISPATCH: {
-				if (typeof payload.s === "number") this.lastSeq = payload.s;
-				// 去重：QQ 在重连/网络抖动时会重放已推送事件（相同 seq 或事件 id），
-				// 不去重会导致同一条用户消息被处理多次、回复多条。
-				if (this.isDuplicate(payload)) break;
-				this.dispatch(payload);
-				break;
-			}
-			case OpCode.RECONNECT: {
-				await this.reconnect();
-				break;
-			}
-			case OpCode.INVALID_SESSION: {
-				// 重新 IDENTIFY。
-				await this.reconnect();
-				break;
-			}
+		} catch (error) {
+			// onMessage 里的任何错误（reconnect/identify 失败等）都不应崩溃进程。
+			console.error(`[qq-ws] onMessage 处理 op=${payload.op} 时出错:`, (error as Error).message);
 		}
 	}
 
@@ -263,7 +275,11 @@ export class QQWebSocketReceiver extends EventEmitter {
 			this.running = false;
 			return;
 		}
-		await this.reconnect();
+		try {
+			await this.reconnect();
+		} catch (error) {
+			console.error(`[qq-ws] onClose reconnect 失败:`, (error as Error).message);
+		}
 	}
 
 	private async reconnect(): Promise<void> {
@@ -277,7 +293,20 @@ export class QQWebSocketReceiver extends EventEmitter {
 		this.emit("reconnecting", { attempt: this.retries, delayMs: delay });
 		await new Promise((r) => setTimeout(r, delay));
 		if (!this.running) return;
-		await this.connect();
+		try {
+			await this.connect();
+		} catch (error) {
+			// connect 失败（getGateway 限频/网络问题等）不崩溃进程，
+			// 递归重试（retries 已递增，退避会更长）。
+			console.warn(`[qq-ws] 重连失败 (第${this.retries}次): ${(error as Error).message}，继续退避重试`);
+			// 递归前检查是否已达上限或已停止
+			if (this.running && this.retries < this.maxRetries) {
+				await this.reconnect();
+			} else if (this.running) {
+				this.emit("fatal", { code: -1, reason: `exceeded ${this.maxRetries} retries (last: ${(error as Error).message})` });
+				this.running = false;
+			}
+		}
 	}
 
 	private parse(data: unknown): WsPayload | undefined {
