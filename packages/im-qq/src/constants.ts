@@ -68,6 +68,13 @@ export const DEFAULT_MAX_RETRIES = 10;
  * 主动断开重连（不等 QQ 服务端超时踢，那样更慢）。
  */
 export const HEARTBEAT_ACK_TOLERANCE = 2;
+/**
+ * 保底重置阈值：连续重连失败这么多次后，认定可能是缓存状态出了问题
+ * （坏的 session_id / 失效的 gateway URL），强制清空全部状态从头走一次完整登录
+ * （getGateway + IDENTIFY）。这是「彻底重连」的保底机制——避免无限退避却一直
+ * 用同一份坏状态重试导致永远恢复不了。
+ */
+export const FULL_RESET_AFTER_FAILURES = 8;
 
 /**
  * 不可恢复的关闭码，收到后停止重连。

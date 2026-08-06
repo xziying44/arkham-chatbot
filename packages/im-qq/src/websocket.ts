@@ -5,6 +5,7 @@ import {
 	DEFAULT_HEARTBEAT_INTERVAL_MS,
 	DEFAULT_INTENTS,
 	FATAL_CLOSE_CODES,
+	FULL_RESET_AFTER_FAILURES,
 	GROUP_AT_MESSAGE_CREATE,
 	HEARTBEAT_ACK_TOLERANCE,
 	INTERACTION_CREATE,
@@ -388,6 +389,16 @@ export class QQWebSocketReceiver extends EventEmitter {
 		// 官方期望客户端重连恢复（Resume）。退避 3s→6s→12s→...→封顶 60s，
 		// 避免退避太短触发 getGateway 限频（100017）死循环。
 		while (this.running) {
+			// 保底机制：连续失败超过阈值，说明可能是缓存的 session_id 或 gateway URL
+			// 坏了却没被清掉，一直用坏状态重试永远恢复不了。强制清空全部状态，
+			// 下一轮从头走完整登录（getGateway + IDENTIFY）。
+			if (this.retries > 0 && this.retries % FULL_RESET_AFTER_FAILURES === 0) {
+				console.warn(`[qq-ws] 已连续重连失败 ${this.retries} 次，执行保底：清空全部缓存状态，从头完整登录`);
+				this.sessionId = null;
+				this.cachedGatewayUrl = null;
+				this.lastSeq = null;
+				// 清空后下一轮 connect 会重新 getGateway + Identify。
+			}
 			const delay = Math.min(RECONNECT_BASE_DELAY_MS * 2 ** this.retries, RECONNECT_MAX_DELAY_MS);
 			this.retries++;
 			this.emit("reconnecting", { attempt: this.retries, delayMs: delay });
@@ -400,7 +411,7 @@ export class QQWebSocketReceiver extends EventEmitter {
 				// connect 失败（getGateway 限频/网络问题等）不崩溃进程，继续退避重试。
 				console.warn(`[qq-ws] 重连失败 (第${this.retries}次): ${(error as Error).message}，${this.running ? "继续退避重试" : "已停止"}`);
 				// 如果是 getGateway 限频，下一轮还是用缓存 URL（已是 null 会被重新获取）；
-				// 若限频持续，退避会拉长，最终缓解。
+				// 若限频持续，退避会拉长，最终缓解。保底机制会在阈值到达时强制清空。
 			}
 		}
 	}
