@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Button, Input, Modal, Select, Space, Table, Tabs, Tag, Typography, App as AntdApp } from "antd";
+import { Alert, Button, Input, Modal, Select, Space, Table, Tabs, Tag, Typography, App as AntdApp } from "antd";
 import { EditOutlined, InboxOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
 import type { AgentTask, Bot, ConversationSegment, MemoryEntry } from "../api/types";
@@ -26,27 +26,47 @@ export default function MemoriesV2() {
   const [editing, setEditing] = useState<MemoryEntry>();
   const [content, setContent] = useState("");
   const [triggers, setTriggers] = useState("");
+  const [error, setError] = useState<string>();
   const { message } = AntdApp.useApp();
 
   useEffect(() => {
+    let active = true;
     api.listBots().then((result) => {
+      if (!active) return;
       setBots(result.items);
       setBotId((current) => current ?? result.items[0]?.id);
+      setError(undefined);
+    }).catch((loadError) => {
+      if (active) setError(errorMessage(loadError));
     });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
     if (!botId) return;
-    api.listScopesV2(botId).then((result) => setScopes(result.items));
+    let active = true;
+    api.listScopesV2(botId).then((result) => {
+      if (!active) return;
+      setScopes(result.items);
+      setError(undefined);
+    }).catch((loadError) => {
+      if (active) setError(errorMessage(loadError));
+    });
+    return () => { active = false; };
   }, [botId]);
 
   const selectScope = async (scope: ScopeRow) => {
     if (!botId) return;
-    setSelected(scope);
-    const detail = await api.getMemoryV2(botId, scope.kind, scope.id);
-    setMemories(detail.memories);
-    setSegments(detail.segments);
-    setTasks(detail.tasks);
+    try {
+      const detail = await api.getMemoryV2(botId, scope.kind, scope.id);
+      setSelected(scope);
+      setMemories(detail.memories);
+      setSegments(detail.segments);
+      setTasks(detail.tasks);
+      setError(undefined);
+    } catch (loadError) {
+      setError(errorMessage(loadError));
+    }
   };
 
   const openEdit = (memory: MemoryEntry) => {
@@ -57,23 +77,44 @@ export default function MemoriesV2() {
 
   const save = async () => {
     if (!editing) return;
-    const updated = await api.updateMemoryV2(editing.id, {
-      content,
-      triggers: triggers.split("，").map((item) => item.trim()).filter(Boolean),
-    });
-    setMemories((items) => items.map((item) => item.id === updated.id ? updated : item));
-    setEditing(undefined);
-    message.success("记忆已更新");
+    try {
+      const updated = await api.updateMemoryV2(editing.id, {
+        content,
+        triggers: triggers.split("，").map((item) => item.trim()).filter(Boolean),
+      });
+      setMemories((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setEditing(undefined);
+      setError(undefined);
+      message.success("记忆已更新");
+    } catch (saveError) {
+      setError(errorMessage(saveError));
+    }
   };
 
   const archive = async (memory: MemoryEntry) => {
-    await api.updateMemoryV2(memory.id, { status: "archived" });
-    setMemories((items) => items.filter((item) => item.id !== memory.id));
-    message.success("记忆已归档");
+    try {
+      await api.updateMemoryV2(memory.id, { status: "archived" });
+      setMemories((items) => items.filter((item) => item.id !== memory.id));
+      setError(undefined);
+      message.success("记忆已归档");
+    } catch (archiveError) {
+      setError(errorMessage(archiveError));
+    }
   };
 
   return (
     <div>
+      {error && (
+        <Alert
+          type="error"
+          showIcon
+          closable
+          message="无法加载记忆数据"
+          description={error}
+          onClose={() => setError(undefined)}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Space style={{ marginBottom: 16 }}>
         <Typography.Title level={4} style={{ margin: 0 }}>记忆与任务</Typography.Title>
         <Select
@@ -140,4 +181,8 @@ export default function MemoriesV2() {
       </Modal>
     </div>
   );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "未知错误";
 }
