@@ -1,6 +1,6 @@
 {
   "name": "arkham-chatbot",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "群聊机器人 — 基于 pi-agent-core 的隔离式群聊智能体",
