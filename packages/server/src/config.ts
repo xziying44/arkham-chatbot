@@ -1,4 +1,9 @@
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const PROJECT_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const DEFAULT_DATA_DIR = resolve(PROJECT_ROOT, "data");
+const DEFAULT_PROMPTS_DIR = resolve(PROJECT_ROOT, "prompts");
 
 /**
  * 从环境变量解析出的应用配置。
@@ -20,16 +25,14 @@ export interface AppConfig {
 		readonly openaiBaseUrl?: string;
 	};
 	readonly session: { ttlMs: number; reaperIntervalMs: number };
-	/** 启动时清除所有 scope 的对话历史（改配置后避免旧上下文污染）。 */
-	readonly clearHistoryOnStart: boolean;
 	/** 思考程度默认值: off/low/medium/high/max。管理端可改。 */
 	readonly thinkingLevel: string;
 	readonly sandbox: { enabled: boolean; networkDisabled: boolean; timeoutSeconds: number };
-	/** 运行时数据根目录（机器人工作区、session.jsonl、memory.md）。 */
+	/** 运行时数据根目录（机器人 scope 工作区与持久任务产物）。 */
 	readonly dataDir: string;
-	/** 技能源文件目录（SKILL.md 所在目录），启动时加载注入所有会话。 */
-	readonly skillsDir: string;
-	/** arkham-workshop CLI 二进制路径（DIY卡图技能用）。可选。 */
+	/** v2 外置提示词目录。 */
+	readonly promptsDir: string;
+	/** arkham-workshop CLI 二进制路径（制卡服务使用）。可选。 */
 	readonly arkhamBinPath?: string;
 	/** arkham-workshop 资产目录（字体/图片/cardback）。可选。 */
 	readonly arkhamAssetsDir?: string;
@@ -87,12 +90,16 @@ function bool(name: string, fallback: boolean): boolean {
 
 /** 从 process.env 读取并校验配置。 */
 export function loadConfig(): AppConfig {
-	const dataDir = resolve(process.env.CHATBOT_DATA_DIR ?? "./data");
-	const skillsDir = resolve(process.env.SKILLS_DIR ?? "./skills");
+	const dataDir = process.env.CHATBOT_DATA_DIR
+		? resolve(PROJECT_ROOT, process.env.CHATBOT_DATA_DIR)
+		: DEFAULT_DATA_DIR;
+	const promptsDir = process.env.CHATBOT_PROMPTS_DIR
+		? resolve(PROJECT_ROOT, process.env.CHATBOT_PROMPTS_DIR)
+		: DEFAULT_PROMPTS_DIR;
 	// arkham-workshop 相关路径：默认从 ARKHAM_WORKSHOP_DIR 推导，或单独指定。
 	const arkhamWorkshopDir = optional("ARKHAM_WORKSHOP_DIR");
 	return {
-		skillsDir,
+		promptsDir,
 		arkhamBinPath: optional("ARKHAM_CLI_PATH")
 			?? (arkhamWorkshopDir ? resolve(arkhamWorkshopDir, "target/release/arkham-cli") : undefined),
 		arkhamAssetsDir: optional("ARKHAM_ASSETS_DIR")
@@ -116,7 +123,6 @@ export function loadConfig(): AppConfig {
 			ttlMs: int("CHATBOT_SESSION_TTL_MS", 3_600_000),
 			reaperIntervalMs: int("CHATBOT_REAPER_INTERVAL_MS", 60_000),
 		},
-		clearHistoryOnStart: bool("CHATBOT_CLEAR_HISTORY_ON_START", false),
 		thinkingLevel: optional("CHATBOT_THINKING_LEVEL") ?? "low",
 		sandbox: {
 			enabled: bool("CHATBOT_SANDBOX_ENABLED", true),
@@ -125,7 +131,9 @@ export function loadConfig(): AppConfig {
 		},
 		dataDir,
 		persona: process.env.CHATBOT_PERSONA,
-		dbPath: resolve(process.env.CHATBOT_DB_PATH ?? `${dataDir}/chatbot.db`),
+		dbPath: process.env.CHATBOT_DB_PATH
+			? resolve(PROJECT_ROOT, process.env.CHATBOT_DB_PATH)
+			: resolve(dataDir, "chatbot.db"),
 		admin: {
 			host: process.env.ADMIN_HOST ?? "127.0.0.1",
 			port: int("ADMIN_PORT", 5180),
@@ -137,4 +145,3 @@ export function loadConfig(): AppConfig {
 		},
 	};
 }
-

@@ -116,6 +116,21 @@ export const api = {
   reapAll: () => request<{ ok: true; reaped: number }>("/api/settings/reap-all", { method: "POST" }),
   getPrompts: () => request<import("./types").PromptPreview>("/api/settings/prompts"),
 
+  getPromptBundle: () => request<import("./types").PromptBundle>("/api/settings/prompts"),
+  reloadPrompts: () => request<{ ok: true; version: number; hash: string }>("/api/settings/prompts/reload", { method: "POST" }),
+  getUsage: () => request<import("./types").UsageWindows>("/api/usage"),
+  listScopesV2: (botId: string) =>
+    request<{ items: Array<{ kind: "group" | "user"; id: string; label: string | null; memoryCount: number; activeTaskCount: number; eventCount: number; lastActivityAt: number }> }>("/api/memories/v2/" + botId + "/scopes"),
+  getMemoryV2: (botId: string, kind: string, scopeId: string) =>
+    request<{
+      memories: import("./types").MemoryEntry[];
+      archivedMemories: import("./types").MemoryEntry[];
+      segments: import("./types").ConversationSegment[];
+      tasks: import("./types").AgentTask[];
+    }>("/api/memories/v2/" + botId + "/" + kind + "/" + scopeId),
+  updateMemoryV2: (id: number, data: Partial<Pick<import("./types").MemoryEntry, "category" | "content" | "triggers" | "status">>) =>
+    request<import("./types").MemoryEntry>("/api/memories/v2/entries/" + id, { method: "PATCH", body: JSON.stringify(data) }),
+
   // skills（只读查看）
   listSkills: () => request<{ items: import("./types").SkillSummary[] }>("/api/skills"),
   getSkill: (name: string) => request<import("./types").SkillDetail>(`/api/skills/${name}`),

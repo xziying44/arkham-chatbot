@@ -72,6 +72,9 @@ importers:
       '@arkham/chatbot-sandbox':
         specifier: workspace:*
         version: link:../sandbox
+      '@arkham/chatbot-store':
+        specifier: workspace:*
+        version: link:../store
       '@earendil-works/pi-agent-core':
         specifier: ^0.83.0
         version: 0.83.0(ws@8.21.1)(zod@4.4.3)

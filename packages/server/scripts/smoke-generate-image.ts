@@ -39,9 +39,6 @@ async function main(): Promise<void> {
 		model: config.model,
 		anthropicBaseUrl: config.llm.anthropicBaseUrl,
 		openaiBaseUrl: config.llm.openaiBaseUrl,
-		thinkingLevel: process.env.SMOKE_THINKING_LEVEL ?? "off",
-		sessionTtlMs: config.session.ttlMs,
-		reaperIntervalMs: config.session.reaperIntervalMs,
 		sandbox: { enabled: false, networkDisabled: false, timeoutSeconds: 30 },
 	});
 

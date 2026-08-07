@@ -66,7 +66,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [selectedPreset, setSelectedPreset] = useState<string>("custom");
-  const { message, modal } = AntdApp.useApp();
+  const { message } = AntdApp.useApp();
 
   const load = async () => {
     setLoading(true);
@@ -128,19 +128,6 @@ export default function SettingsPage() {
     }
   };
 
-  const reapAll = () => {
-    modal.confirm({
-      title: "回收所有活跃会话？",
-      content: "改 LLM 端点/沙箱设置后，活跃会话仍持有旧配置。回收后下次激活才会应用新设置。回收会提取记忆并落盘，不影响数据。",
-      okText: "回收",
-      cancelText: "取消",
-      onOk: async () => {
-        const r = await api.reapAll();
-        message.success(`已回收 ${r.reaped} 个会话`);
-      },
-    });
-  };
-
   const currentPreset = selectedPreset || detectPreset(settings);
   const isAnthropic = (settings.llm_model ?? "").startsWith("anthropic/");
   const isOpenai = (settings.llm_model ?? "").startsWith("openai/");
@@ -153,7 +140,7 @@ export default function SettingsPage() {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="LLM 端点、沙箱等运行参数改动后，对新激活的会话立即生效；已在运行的活跃会话需点下方「回收所有会话」才会应用。"
+        message="模型端点和沙箱参数修改后需要重启服务。提示词可在提示词页面独立热重载。"
       />
 
       <Card title="LLM 端点" loading={loading} style={{ marginBottom: 16 }}>
@@ -228,32 +215,12 @@ export default function SettingsPage() {
           layout="vertical"
           onFinish={save}
           initialValues={{
-            thinking_level: settings.thinking_level || "low",
-            session_ttl_ms: Number(settings.session_ttl_ms),
             sandbox_enabled: settings.sandbox_enabled === "true",
             sandbox_network_disabled: settings.sandbox_network_disabled === "true",
             sandbox_timeout_seconds: Number(settings.sandbox_timeout_seconds),
           }}
           key={JSON.stringify(settings) + "-runtime"}
         >
-          <Form.Item
-            label="思考程度"
-            name="thinking_level"
-            tooltip="控制推理模型（如 DeepSeek）的思考强度。off=关闭思考（最快），low/medium/high/max=开启并逐渐加强。群聊场景建议 low（兼顾速度与质量）。改后需重启或回收会话生效。"
-          >
-            <Select
-              options={[
-                { value: "off", label: "关闭（最快，不思考）" },
-                { value: "low", label: "低（推荐，快+轻度思考）" },
-                { value: "medium", label: "中" },
-                { value: "high", label: "高（慢但更深思熟虑）" },
-                { value: "max", label: "最高" },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item label="会话回收阈值（毫秒）" name="session_ttl_ms" rules={[{ required: true }]}>
-            <InputNumber min={60000} style={{ width: "100%" }} />
-          </Form.Item>
           <Form.Item label="沙箱启用" name="sandbox_enabled" valuePropName="checked" tooltip="Linux 生产用 Bubblewrap 隔离 bash；macOS 开发回退直接执行">
             <Switch />
           </Form.Item>
@@ -266,7 +233,6 @@ export default function SettingsPage() {
 
           <Space>
             <Button type="primary" htmlType="submit">保存</Button>
-            <Button onClick={reapAll}>回收所有会话</Button>
           </Space>
         </Form>
       </Card>

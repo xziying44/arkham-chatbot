@@ -6,6 +6,7 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messag
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import {
 	createLogger,
+	PromptRegistry,
 	addSink,
 	createConsoleSink,
 	setLogLevel,
@@ -17,6 +18,8 @@ import {
 	SettingsRepository,
 	MessageRepository,
 	LogRepository,
+	AgentRuntimeRepository,
+	UsageRepository,
 	SettingsKeys,
 	type DatabaseSync,
 } from "@arkham/chatbot-store";
@@ -31,10 +34,6 @@ export interface ResolvedSettings {
 	readonly model: string;
 	readonly anthropicBaseUrl?: string;
 	readonly openaiBaseUrl?: string;
-	/** 思考程度: off/low/medium/high/max。off=关闭思考，其余=开启并对应 effort。 */
-	readonly thinkingLevel: string;
-	readonly sessionTtlMs: number;
-	readonly reaperIntervalMs: number;
 	readonly sandbox: SandboxConfig;
 }
 
@@ -45,9 +44,6 @@ export function resolveSettings(config: AppConfig, db: DatabaseSync): ResolvedSe
 		model: s.getOr(SettingsKeys.llmModel, config.model),
 		anthropicBaseUrl: s.get(SettingsKeys.llmAnthropicBaseUrl) ?? config.llm.anthropicBaseUrl,
 		openaiBaseUrl: s.get(SettingsKeys.llmOpenaiBaseUrl) ?? config.llm.openaiBaseUrl,
-		thinkingLevel: s.getOr(SettingsKeys.thinkingLevel, config.thinkingLevel),
-		sessionTtlMs: s.getInt(SettingsKeys.sessionTtlMs, config.session.ttlMs),
-		reaperIntervalMs: config.session.reaperIntervalMs, // 不在管理端改，用 env
 		sandbox: {
 			enabled: s.getBool(SettingsKeys.sandboxEnabled, config.sandbox.enabled),
 			networkDisabled: s.getBool(SettingsKeys.sandboxNetworkDisabled, config.sandbox.networkDisabled),
@@ -114,6 +110,15 @@ export async function startApp(): Promise<AppRuntime> {
 	const settings = resolveSettings(config, db);
 	const { models, model } = buildModels(settings);
 	const messages = new MessageRepository(db);
+	const runtime = new AgentRuntimeRepository(db);
+	const usage = new UsageRepository(db);
+	const prompts = new PromptRegistry(config.promptsDir);
+	const promptSnapshot = await prompts.load();
+	appLog.info("v2 提示词已加载", {
+		version: promptSnapshot.version,
+		hash: promptSnapshot.hash.slice(0, 12),
+		estimatedTokens: promptSnapshot.estimatedTokens,
+	});
 
 	// 多机器人编排器。兼容端点走非流式桥接，避免 SSE 只发心跳却永不结束时
 	// SDK 请求超时失效；其它原生 API 仍使用 streamSimple。
@@ -130,19 +135,16 @@ export async function startApp(): Promise<AppRuntime> {
 	const botManager = new BotManager({
 		dataRoot: config.dataDir,
 		model,
-		models,
 		streamFn,
 		sandbox: settings.sandbox,
-		sessionTtlMs: settings.sessionTtlMs,
-		reaperIntervalMs: settings.reaperIntervalMs,
-		thinkingLevel: settings.thinkingLevel,
 		messages,
-		skillsDir: config.skillsDir,
+		runtime,
+		usage,
+		prompts,
 		arkhamBinPath: config.arkhamBinPath,
 		arkhamAssetsDir: config.arkhamAssetsDir,
 		cardDatabaseDir: config.cardDatabaseDir,
 		minimax: config.minimax,
-		clearHistoryOnStart: config.clearHistoryOnStart,
 		logger: appLog,
 	});
 
@@ -159,6 +161,7 @@ export async function startApp(): Promise<AppRuntime> {
 		db,
 		botManager,
 		logBus,
+		prompts,
 		host: config.admin.host,
 		port: config.admin.port,
 		webDistDir: config.admin.webDistDir,
@@ -192,13 +195,7 @@ export function buildModels(settings: ResolvedSettings): { models: Models; model
 		(models as ReturnType<typeof createModels>).setProvider(provider);
 	}
 
-	// 思考程度控制（thinkingLevel: off/low/medium/high/max）：
-	// Model.reasoning 必须为 true，pi-ai 才会处理 thinking 参数。thinkingLevel 是真正的
-	// 开关——off 时 pi-ai 显式发 thinking:disabled（Anthropic）/thinking:{type:disabled}
-	//（OpenAI DeepSeek），其它值发对应的 effort。若 reasoning=false，pi-ai 整个 thinking
-	// 块跳过 → 不发 thinking 参数 → DeepSeek 用模型默认（=开思考 high），反而关不掉。
-	// 所以 reasoning 一律 true（DeepSeek 是思考模型），thinkingLevel 控制开关 + 程度。
-	// 实际的 thinkingLevel 通过 Agent.initialState.thinkingLevel 传给 pi-ai（见 BotManager）。
+	// 保持 reasoning=true，具体推理强度由规划器和场景能力在每次调用时选择。
 	const reasoningEnabled = true;
 
 	if (settings.anthropicBaseUrl) {
@@ -237,8 +234,7 @@ export function buildModels(settings: ResolvedSettings): { models: Models; model
 	if (settings.openaiBaseUrl) {
 		const { provider: providerId, modelId } = parseModelSpec(settings.model);
 		if (providerId === "openai") {
-			// thinkingLevel 控制开关与程度；reasoning=true 让 pi-ai 处理 thinking 参数。
-			//（非思考模型如 GPT-4o 设了 reasoning=true 也无害——pi-ai 不发 thinking 参数）
+			// reasoning=true 让 pi-ai 能按每次调用的选项处理思考参数。
 			const customModel: Model<"openai-completions"> = {
 				id: modelId,
 				name: modelId,

@@ -1,5 +1,4 @@
 import type { IncomingMessage } from "@arkham/chatbot-core";
-import type { SessionManager } from "@arkham/chatbot-core";
 import type { Logger } from "@arkham/chatbot-core";
 import type { ImEvent } from "@arkham/chatbot-im-core";
 import type { ImAdapter } from "@arkham/chatbot-im-core";
@@ -8,14 +7,21 @@ import type { MessageRepository } from "@arkham/chatbot-store";
 /**
  * 把入站 IM 事件路由到对应会话，并把回复发回 IM。
  *
- * ImEvent → IncomingMessage → SessionManager.dispatch → OutgoingMessage → ImAdapter.sendText。
+ * ImEvent → IncomingMessage → ScopeCoordinator.dispatch → 回复 → ImAdapter。
  * 单条消息的处理失败只记日志，不向上抛（避免一条坏消息拖垮整个事件循环）。
  *
  * 同时把入站/出站消息写入 message 流水（管理端「消息列表」用）。
  */
 export interface MessageRouterOptions {
 	readonly adapter: ImAdapter;
-	readonly sessions: SessionManager;
+	readonly sessions: {
+		dispatch(message: IncomingMessage & { attachments?: readonly { url: string; filename: string; contentType: string }[] }): Promise<{
+			text: string;
+			replyToMessageId?: string;
+			images?: readonly string[];
+		}>;
+		dispatchInteraction(scope: IncomingMessage["scope"], callback: { interactionId: string; buttonData?: string; buttonId?: string }): void;
+	};
 	/** 当前机器人 id（消息流水归属）。 */
 	readonly botId: string;
 	/** 消息流水仓库（可选；不传则不落库，便于测试）。 */
@@ -27,14 +33,14 @@ export function createMessageRouter(opts: MessageRouterOptions) {
 	const { adapter, sessions, botId, messages, logger } = opts;
 
 	return async function handle(event: ImEvent): Promise<void> {
-		// 按钮点击回调：立即应答平台（3 秒时限），再路由到 session 消费挂起的 ask_user。
+		// 按钮点击回调必须在平台时限内立即应答。
 		if (event.type === "interaction") {
 			// 立即 PUT /interactions/{id} 应答，避免用户端一直 loading。
-			// fire-and-forget：即使应答失败也不影响 resolve ask_user。
+			// 异步应答失败只记日志，不阻塞后续事件。
 			adapter.replyInteraction?.(event.interactionId, 0).catch((e) => {
 				logger?.warn("应答交互事件失败", { interactionId: event.interactionId, error: (e as Error).message });
 			});
-			// resolve 对应 scope 的挂起提问（用户点了按钮 → 选择完成）。
+			// 保留交互转发接口，供后续显式交互场景使用。
 			sessions.dispatchInteraction(event.scope, {
 				interactionId: event.interactionId,
 				buttonData: event.buttonData,
@@ -69,17 +75,14 @@ export function createMessageRouter(opts: MessageRouterOptions) {
 			logger?.warn("入站消息落库失败", { botId, error: (e as Error).message });
 		}
 
-			try {
-				const reply = await sessions.dispatch(incoming);
-				if (reply.text) {
-					// 用 dispatch 返回的 replyToMessageId（触发 run 的那条群消息），
-					// 而非当前 event 的 messageId——群消息合并时可能不同。
-					// @ 人由 agent 自行决定（在文本里写 <qqbot-at-user> 标签），adapter 不自动 @。
-					await adapter.sendText(
-						event.scope,
-						reply.text,
-						reply.replyToMessageId ?? event.platformMessageId,
-					);
+		try {
+			const reply = await sessions.dispatch(incoming);
+			if (reply.text) {
+				await adapter.sendText(
+					event.scope,
+					reply.text,
+					reply.replyToMessageId ?? event.platformMessageId,
+				);
 				// 出站落库。
 				try {
 					messages?.insert({
@@ -94,6 +97,13 @@ export function createMessageRouter(opts: MessageRouterOptions) {
 				} catch (e) {
 					logger?.warn("出站消息落库失败", { botId, error: (e as Error).message });
 				}
+			}
+			for (const image of reply.images ?? []) {
+				await adapter.sendImage(
+					event.scope,
+					image,
+					reply.replyToMessageId ?? event.platformMessageId,
+				);
 			}
 		} catch (error) {
 			logger?.error("处理消息失败", {

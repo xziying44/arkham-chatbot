@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { Button, Descriptions, Tag, Typography, Space, Spin, Collapse, App as AntdApp, Empty } from "antd";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
-import type { ScopeDetail } from "../api/types";
+import type { AgentMessage, ScopeDetail } from "../api/types";
 import MessageList from "../components/MessageList";
 import { fmtTime } from "../utils";
 
@@ -65,7 +65,7 @@ export default function SessionDetail() {
       </Descriptions>
 
       <Typography.Title level={5}>对话记录（最近 {detail.messages.length} 条，点击气泡看原始数据）</Typography.Title>
-      <MessageList messages={detail.messages} />
+      <MessageList messages={detail.messages as unknown as AgentMessage[]} />
 
       <Collapse
         style={{ marginTop: 16 }}

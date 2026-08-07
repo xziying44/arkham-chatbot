@@ -14,7 +14,8 @@
     "dev": "node --env-file=.env --import tsx src/bin.ts",
     "smoke": "node --import tsx scripts/smoke.ts",
     "test": "node --test --import tsx test/*.test.ts",
-    "smoke:genimg": "node --env-file=../../.env --import tsx scripts/smoke-generate-image.ts"
+		"smoke:genimg": "node --env-file=../../.env --import tsx scripts/smoke-generate-image.ts",
+		"benchmark:v2": "node --env-file=../../.env --import tsx scripts/benchmark-v2.ts"
   },
   "dependencies": {
     "@arkham/chatbot-core": "workspace:*",

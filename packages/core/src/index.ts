@@ -28,3 +28,19 @@ export { MemoryStore } from "./session/memory.ts";
 export { MemoryFiles } from "./session/memory-files.ts";
 export { createLogger, addSink, setLogLevel, createConsoleSink } from "./logging.ts";
 export type { Logger, LogEntry, LogSink, LogLevel } from "./logging.ts";
+export { PromptRegistry, estimateTokens } from "./runtime/prompt-registry.ts";
+export type { PromptId, PromptSnapshot } from "./runtime/prompt-registry.ts";
+export { TurnPlanner, parseTurnPlan } from "./runtime/scene-router.ts";
+export type { TaskMode, TurnAction, TurnPlan, TurnPlanResult, TurnPlannerInput } from "./runtime/scene-router.ts";
+export { ScopeCoordinator, normalizeModelUsage } from "./runtime/scope-coordinator.ts";
+export type {
+	CapabilityArtifact,
+	CapabilityResult,
+	CardRenderInput,
+	CoordinatorReply,
+	GeneralTaskInput,
+	RuntimeAttachment,
+	RuntimeScopeInfo,
+	ScopeCoordinatorOptions,
+} from "./runtime/scope-coordinator.ts";
+export { createBatchExecTool, createBatchWorkspaceTool } from "./runtime/batch-tools.ts";
