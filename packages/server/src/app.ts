@@ -22,6 +22,7 @@ import {
 } from "@arkham/chatbot-store";
 import { LogBus, startAdminServer, type AdminServer } from "@arkham/chatbot-admin-api";
 import { BotManager, type SandboxConfig } from "./bot-manager.ts";
+import { createNonStreamStreamFn } from "./non-stream-bridge.ts";
 import { loadConfig, type AppConfig } from "./config.ts";
 import { bootstrapIfEmpty, loadBotConfigs } from "./bootstrap.ts";
 
@@ -114,14 +115,8 @@ export async function startApp(): Promise<AppRuntime> {
 	const { models, model } = buildModels(settings);
 	const messages = new MessageRepository(db);
 
-	// 多机器人编排器。
-	// streamFn 策略：走 pi-ai 原生流式（streamSimple），带 2 分钟超时 + 3 次重试。
-	// pi-ai 按 baseUrl 自动检测 deepseek 兼容模式（thinkingFormat: "deepseek"），
-	// 正确分离 reasoning_content 与 content。
-	// 2026-08-06 实测：DeepSeek 的 Anthropic 兼容端点（api.deepseek.com/anthropic）
-	// 在 stream + thinking(off/low) + tool_use 下工具参数完整（scripts/smoke-generate-image.ts
-	// 双测试通过）；早先"anthropic 端点工具参数为空"的判断实为环境变量串 key
-	//（shell 的 ANTHROPIC_AUTH_TOKEN 覆盖了 .env 导致 401）。两个端点都可用。
+	// 多机器人编排器。兼容端点走非流式桥接，避免 SSE 只发心跳却永不结束时
+	// SDK 请求超时失效；其它原生 API 仍使用 streamSimple。
 	const LLM_TIMEOUT_MS = 120_000;
 	const LLM_MAX_RETRIES = 3;
 	const nativeStreamFn = (model: Model<any>, context: any, options?: any) =>
@@ -131,11 +126,12 @@ export async function startApp(): Promise<AppRuntime> {
 			maxRetries: LLM_MAX_RETRIES,
 			maxRetryDelayMs: 8_000,
 		});
+	const streamFn = createNonStreamStreamFn(nativeStreamFn);
 	const botManager = new BotManager({
 		dataRoot: config.dataDir,
 		model,
 		models,
-		streamFn: nativeStreamFn,
+		streamFn,
 		sandbox: settings.sandbox,
 		sessionTtlMs: settings.sessionTtlMs,
 		reaperIntervalMs: settings.reaperIntervalMs,
