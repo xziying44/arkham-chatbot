@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { readdir, readFile, unlink, stat, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { DatabaseSync } from "@arkham/chatbot-store";
-import { AgentRuntimeRepository, ScopeLabelRepository } from "@arkham/chatbot-store";
+import { ScopeLabelRepository } from "@arkham/chatbot-store";
 import type { BotManagerLike } from "../contracts.ts";
 
 interface MemoryRoutesDeps {
@@ -22,47 +22,6 @@ export function createMemoryRoutes(deps: MemoryRoutesDeps): Hono {
 	const app = new Hono();
 	const { db, botManager } = deps;
 	const labels = new ScopeLabelRepository(db);
-	const runtime = new AgentRuntimeRepository(db);
-
-	app.get("/v2/:botId/scopes", (c) => {
-		const botId = c.req.param("botId");
-		const labelMap = new Map(labels.list(botId).map((item) => [item.scopeKind + ":" + item.scopeId, item.label]));
-		const items = runtime.listScopeSummaries(botId).map((scope) => ({
-			kind: scope.scopeKind,
-			id: scope.scopeId,
-			label: labelMap.get(scope.scopeKind + ":" + scope.scopeId) ?? null,
-			memoryCount: scope.memoryCount,
-			activeTaskCount: scope.activeTaskCount,
-			eventCount: scope.eventCount,
-			lastActivityAt: scope.lastActivityAt,
-		}));
-		return c.json({ items });
-	});
-
-	app.get("/v2/:botId/:kind/:scopeId", (c) => {
-		const { botId, kind, scopeId } = c.req.param();
-		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
-		const scope = { botId, scopeKind: kind as "group" | "user", scopeId };
-		return c.json({
-			memories: runtime.listMemories(scope),
-			archivedMemories: runtime.listMemories(scope, "archived"),
-			segments: runtime.listRecentSegments(scope),
-			tasks: runtime.listTasks(scope, ["active", "waiting", "completed", "failed", "cancelled"], 50),
-		});
-	});
-
-	app.patch("/v2/entries/:id", async (c) => {
-		const id = Number(c.req.param("id"));
-		if (!Number.isInteger(id)) return c.json({ error: "记忆 ID 无效" }, 400);
-		const body = await c.req.json().catch(() => ({})) as {
-			category?: string;
-			content?: string;
-			triggers?: string[];
-			status?: "active" | "archived";
-		};
-		const updated = runtime.updateMemory(id, body);
-		return updated ? c.json(updated) : c.json({ error: "记忆不存在" }, 404);
-	});
 
 	// ---- 会话列表（磁盘扫描 + 备注 + 记忆文件数）----
 	app.get("/:botId/scopes", async (c) => {

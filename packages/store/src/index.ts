@@ -12,17 +12,3 @@ export { AdminSessionRepository } from "./admin-sessions.ts";
 export type { AdminSessionRecord } from "./admin-sessions.ts";
 export { ScopeLabelRepository } from "./scope-labels.ts";
 export type { ScopeLabelRecord } from "./scope-labels.ts";
-export { AgentRuntimeRepository } from "./agent-runtime.ts";
-export type {
-	AgentTask,
-	ConversationEvent,
-	ConversationSegment,
-	MemoryEntry,
-	RuntimeScope,
-	RuntimeScopeSummary,
-	SceneId,
-	ScopeKind as RuntimeScopeKind,
-	TaskStatus,
-} from "./agent-runtime.ts";
-export { UsageRepository } from "./usage.ts";
-export type { NormalizedUsage, UsageSummary } from "./usage.ts";

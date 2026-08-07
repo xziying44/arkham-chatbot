@@ -2,30 +2,19 @@ import { useEffect, useState } from "react";
 import { Layout as AntLayout, Menu, Button, Space, Typography, App as AntdApp } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import {
-  AppstoreOutlined,
-  CommentOutlined,
-  DashboardOutlined,
-  LogoutOutlined,
-  RobotOutlined,
-  SettingOutlined,
-  SnippetsOutlined,
-  ThunderboltOutlined,
-  UnorderedListOutlined,
-} from "@ant-design/icons";
 
 const { Header, Sider, Content } = AntLayout;
 
 const menuItems = [
-  { key: "/", label: "概览", icon: <DashboardOutlined /> },
-  { key: "/bots", label: "机器人", icon: <RobotOutlined /> },
-  { key: "/sessions", label: "会话", icon: <CommentOutlined /> },
-  { key: "/messages", label: "消息", icon: <UnorderedListOutlined /> },
-  { key: "/logs", label: "日志", icon: <SnippetsOutlined /> },
-  { key: "/memories", label: "记忆", icon: <AppstoreOutlined /> },
-  { key: "/usage", label: "用量", icon: <ThunderboltOutlined /> },
-  { key: "/prompts", label: "提示词", icon: <SnippetsOutlined /> },
-  { key: "/settings", label: "设置", icon: <SettingOutlined /> },
+  { key: "/", label: "概览" },
+  { key: "/bots", label: "机器人" },
+  { key: "/sessions", label: "会话" },
+  { key: "/messages", label: "消息" },
+  { key: "/logs", label: "日志" },
+  { key: "/memories", label: "记忆" },
+  { key: "/skills", label: "技能" },
+  { key: "/prompts", label: "提示词" },
+  { key: "/settings", label: "设置" },
 ];
 
 export default function Layout() {
@@ -64,7 +53,7 @@ export default function Layout() {
         <Header style={{ background: "#fff", padding: "0 24px", display: "flex", justifyContent: "flex-end", alignItems: "center", borderBottom: "1px solid #f0f0f0", height: 48, lineHeight: "48px" }}>
           <Space>
             <Typography.Text>{username}</Typography.Text>
-            <Button size="small" icon={<LogoutOutlined />} onClick={logout}>退出</Button>
+            <Button size="small" onClick={logout}>退出</Button>
           </Space>
         </Header>
         <Content style={{ padding: 24, background: "#fff", minHeight: 360, overflow: "auto" }}>

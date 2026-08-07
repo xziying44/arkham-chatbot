@@ -1,15 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-	openDb,
-	BotRepository,
-	SettingsRepository,
-	MessageRepository,
-	LogRepository,
-	AdminSessionRepository,
-	AgentRuntimeRepository,
-	UsageRepository,
-} from "../src/index.ts";
+import { openDb, BotRepository, SettingsRepository, MessageRepository, LogRepository, AdminSessionRepository } from "../src/index.ts";
 
 test("bots repository: insert/get/list/update/delete", async () => {
 	const db = await openDb(":memory:");
@@ -137,99 +128,4 @@ test("openDb creates parent directory and persists to disk", async () => {
 	const { readFile } = await import("node:fs/promises");
 	const stat = await readFile(tmp);
 	assert.ok(stat.byteLength > 0);
-});
-
-test("agent runtime: 热窗口按 token 截断并沉淀旧事件", async () => {
-	const db = await openDb(":memory:");
-	const runtime = new AgentRuntimeRepository(db);
-	const scope = { botId: "b1", scopeKind: "group" as const, scopeId: "g1" };
-	const first = runtime.insertEvent({ ...scope, direction: "in", senderId: "u1", visibleText: "第一条", tokenCount: 10 });
-	const second = runtime.insertEvent({ ...scope, direction: "out", visibleText: "第二条", tokenCount: 20 });
-	const third = runtime.insertEvent({ ...scope, direction: "in", senderId: "u2", visibleText: "第三条", tokenCount: 30 });
-
-	assert.deepEqual(runtime.listHot(scope, 45).map((event) => event.id), [third.id]);
-	assert.equal(runtime.hotTokenCount(scope), 60);
-	const segment = runtime.compactEvents(scope, [first, second], "前两条摘要", ["第一条", "第二条"]);
-	assert.equal(segment.tokenCount, 30);
-	assert.deepEqual(runtime.listHot(scope).map((event) => event.id), [third.id]);
-	assert.equal(runtime.hotTokenCount(scope), 30);
-	assert.equal(runtime.listRecentSegments(scope)[0].summary, "前两条摘要");
-	db.close();
-});
-
-test("agent runtime: 任务 CRUD、产物和空状态过滤", async () => {
-	const db = await openDb(":memory:");
-	const runtime = new AgentRuntimeRepository(db);
-	const scope = { botId: "b1", scopeKind: "user" as const, scopeId: "u1" };
-	const created = runtime.createTask({
-		...scope,
-		id: "task-1",
-		scene: "card_render",
-		creatorId: "u1",
-		title: "制作泽耶尔",
-		state: { cardName: "泽耶尔·戴" },
-	});
-	assert.equal(created.status, "active");
-	assert.equal(runtime.listTasks(scope).length, 1);
-	assert.deepEqual(runtime.listTasks(scope, []), []);
-
-	runtime.addArtifact({ id: "artifact-1", taskId: "task-1", kind: "card", version: 1, relativePath: "tasks/task-1/cards/v001.card" });
-	const updated = runtime.updateTask("task-1", { status: "completed", state: { cardName: "泽耶尔·戴", done: true } });
-	assert.equal(updated?.latestArtifactId, "artifact-1");
-	assert.equal(updated?.status, "completed");
-	assert.equal(runtime.listTasks(scope).length, 0);
-	assert.equal(runtime.listTasks(scope, ["completed"])[0].state.done, true);
-	db.close();
-});
-
-test("agent runtime: 触发词可以命中完整记忆并记录使用次数", async () => {
-	const db = await openDb(":memory:");
-	const runtime = new AgentRuntimeRepository(db);
-	const scope = { botId: "b1", scopeKind: "group" as const, scopeId: "g1" };
-	runtime.upsertMemory({
-		...scope,
-		category: "术语",
-		content: "‘揭示’应保留为规则术语，不改成‘展示’。",
-		triggers: ["揭示"],
-	});
-
-	const matches = runtime.findRelevantMemories(scope, "这张牌的揭示效果怎么写？");
-	assert.equal(matches.length, 1);
-	assert.match(matches[0].content, /不改成/);
-	assert.equal(matches[0].useCount, 1);
-	assert.ok(matches[0].lastUsedAt);
-	db.close();
-});
-
-test("usage repository: 汇总 token、缓存命中率和 P50/P95", async () => {
-	const db = await openDb(":memory:");
-	const usage = new UsageRepository(db);
-	const scope = { botId: "b1", scopeKind: "group" as const, scopeId: "g1" };
-	for (let index = 1; index <= 20; index++) {
-		const id = `run-${index}`;
-		usage.startRun({ ...scope, id, scene: "chat", routeMethod: "rule", startedAt: 1_000 });
-		usage.insertModelCall({
-			runId: id,
-			sequence: 1,
-			provider: "anthropic",
-			api: "anthropic-messages",
-			model: "deepseek-v4-flash",
-			startedAt: 1_000,
-			durationMs: index * 10,
-			usage: { inputTokensTotal: 100, inputTokensUncached: 40, cacheReadTokens: 60, cacheWriteTokens: 0, outputTokens: 10 },
-			toolCallCount: 0,
-			status: "ok",
-		});
-		usage.finishRun(id, { status: index === 20 ? "error" : "ok", modelCallCount: 1, toolCallCount: 0, completedAt: 1_000 + index * 10 });
-	}
-
-	const summary = usage.summary();
-	assert.equal(summary.runs, 20);
-	assert.equal(summary.modelCalls, 20);
-	assert.equal(summary.inputTokensTotal, 2_000);
-	assert.equal(summary.cacheHitRate, 0.6);
-	assert.equal(summary.p50DurationMs, 100);
-	assert.equal(summary.p95DurationMs, 190);
-	assert.equal(summary.failures, 1);
-	db.close();
 });

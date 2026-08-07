@@ -11,7 +11,7 @@ import { resolve } from "node:path";
  *   返回 `Skill[]`。它要求 skill 的 `name` 与所在目录名一致（agentskills.io 规范）。
  * - `loadSkills` 返回的 `skill.filePath` 是**宿主机绝对路径**（因为 env 是宿主 env）。
  *   但 agent 运行在沙箱里，它的 `read` 工具以沙箱 cwd 为根。技能目录会被
- *   `--ro-bind`（生产 bwrap）或 ScopedExecutionEnv（文件工具）映射到 `<workspaceDir>/skills/`。
+ *   `--ro-bind`（生产 bwrap）或 symlink（开发）映射到 `<workspaceDir>/skills/`。
  *   所以必须把 filePath 重写成 `<workspaceDir>/skills/<相对路径>`，
  *   agent 才能用 `read workspace/skills/<技能>/SKILL.md` 读到完整技能文件。
  *

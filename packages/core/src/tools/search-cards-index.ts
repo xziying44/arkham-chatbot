@@ -5,8 +5,8 @@
  * 进程级懒加载 + 缓存：BotManager 启动时加载一次，所有 scope 共享同一份索引，
  * 避免每个会话重复读 9MB 文件。
  *
- * 索引抽取搜索与规则问答所需字段（从 a 面为主），包含完整正文。
- * 正文保留在内存索引中，避免规则问答再次读取 9MB 原始文件。
+ * 索引只抽取搜索/展示所需的关键字段（从 a 面为主），不保留完整 body，
+ * 既省内存又让匹配逻辑简单稳定。完整正文 agent 不需要——查询返回关键字段 + 图片路径即可。
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -44,10 +44,6 @@ export interface IndexedCard {
 	/** 技能图标（a 面 content.submit_icon）。 */
 	readonly submit_icon: readonly string[];
 	readonly weakness_type?: string;
-	/** 卡牌完整正文（a 面 content.body）。 */
-	readonly body?: string;
-	/** 风味文字（a 面 content.flavor）。 */
-	readonly flavor?: string;
 	/**
 	 * 各面的图片信息。face 为 "a"/"b"/"a-c"，imageFile 为沙箱内相对路径
 	 * （如 cards-db/card_images/01006_a.jpg）。
@@ -120,8 +116,6 @@ interface FaceContent {
 	victory?: number;
 	submit_icon?: string[];
 	weakness_type?: string;
-	body?: string;
-	flavor?: string;
 }
 
 interface RawFace {
@@ -197,8 +191,6 @@ function toIndexed(raw: RawCard, sandboxImagePrefix: string): IndexedCard | null
 		victory: a.victory,
 		submit_icon: a.submit_icon ?? [],
 		weakness_type: a.weakness_type,
-		body: a.body,
-		flavor: a.flavor,
 		faces: faceList,
 	};
 }

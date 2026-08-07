@@ -10,7 +10,6 @@ import {
 import {
 	type BotManagerLike,
 	type LogBusLike,
-	type PromptRegistryLike,
 } from "./contracts.ts";
 import { verifyPassword, generateSessionToken, SESSION_COOKIE, SESSION_TTL_MS } from "./auth.ts";
 import { createBotsRoutes } from "./routes/bots.ts";
@@ -19,13 +18,12 @@ import { createMessagesRoutes } from "./routes/messages.ts";
 import { createLogsRoutes } from "./routes/logs.ts";
 import { createSettingsRoutes } from "./routes/settings.ts";
 import { createMemoryRoutes } from "./routes/memories.ts";
-import { createUsageRoutes } from "./routes/usage.ts";
+import { createSkillsRoutes } from "./routes/skills.ts";
 
 export interface AdminServerOptions {
 	readonly db: DatabaseSync;
 	readonly botManager: BotManagerLike;
 	readonly logBus: LogBusLike;
-	readonly prompts: PromptRegistryLike;
 	readonly host: string;
 	readonly port: number;
 	/** admin-web 构建产物目录（可选；未提供时只服务 API）。 */
@@ -108,12 +106,12 @@ export async function startAdminServer(opts: AdminServerOptions): Promise<AdminS
 
 	// ---- 业务路由 ----
 	app.route("/api/bots", createBotsRoutes({ db, botManager }));
-	app.route("/api/bots", createSessionsRoutes({ db, botManager }));
+	app.route("/api/bots", createSessionsRoutes({ botManager }));
 	app.route("/api/messages", createMessagesRoutes({ db }));
 	app.route("/api/logs", createLogsRoutes({ db, logBus }));
-	app.route("/api/settings", createSettingsRoutes({ db, botManager, prompts: opts.prompts }));
+	app.route("/api/settings", createSettingsRoutes({ db, botManager }));
 	app.route("/api/memories", createMemoryRoutes({ db, botManager }));
-	app.route("/api/usage", createUsageRoutes({ db }));
+	app.route("/api/skills", createSkillsRoutes({ skillsDir: botManager.skillsDir }));
 
 	// ---- 静态文件（admin-web SPA）----
 	if (webDistDir) {

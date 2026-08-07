@@ -8,18 +8,18 @@
 |---|---|
 | Agent 运行时 | `@earendil-works/pi-agent-core`（npm，通用 agentic 循环） |
 | LLM 抽象 | `@earendil-works/pi-ai`（38 家 provider 统一接口） |
-| 沙箱 | ScopedExecutionEnv 文件边界 + Bubblewrap（Linux 生产） |
+| 沙箱 | Bubblewrap（Linux 生产）+ NodeExecutionEnv（macOS 开发回退） |
 | IM | QQ 官方机器人 API v2（WebSocket + AccessToken） |
 | 运行平台 | Node 22.19+ / TypeScript / ESM / pnpm workspace |
 
-核心判断：**agent 主进程在宿主运行，但它持有的文件与命令能力都经过硬边界**。`ScopedExecutionEnv` 限制全部文件 API，Linux 生产再用 Bubblewrap 把每条 bash 命令放入最小根文件系统。
+核心判断：**agent 进程在宿主跑，仅 bash 命令执行被 bwrap 包裹隔离**。pi 的工具工厂通过 `ExecutionEnv` 接口执行命令——换掉 env，bash 工具零改动自动走沙箱。
 
 ## 仓库结构
 
 ```
 packages/
 ├── core/       核心运行时：ChatBotSession + SessionManager（TTL 回收/串行/记忆）+ 工具装配 + 结构化 logging
-├── sandbox/    ScopedExecutionEnv + BwrapExecutionEnv + env-factory
+├── sandbox/    BwrapExecutionEnv + env-factory（平台判断 + 开发回退）
 ├── im-core/    IM 平台中立抽象：ImAdapter 接口 + ImEvent
 ├── im-qq/      QQ API v2 适配器：access_token + WebSocket + 发消息
 ├── store/      SQLite（node:sqlite，零原生依赖）+ repository（bots/settings/messages/logs/admin_sessions）
@@ -93,10 +93,8 @@ pnpm --filter @arkham/chatbot-admin-web dev
 
 ### 沙箱说明
 
-- 每个群和私聊使用 `data/bots/<botId>/<group|user>/<scopeId>/workspace/` 独立目录；`cleanup` 只回收进程，不删除 workspace，文件持续保留。
-- 所有文件 API 仅允许访问当前 workspace；技能、历史、卡牌库、CLI 与资产通过显式只读挂载访问。绝对路径、`..` 和越界符号链接均会被拒绝。
-- Linux 生产必须启用 `CHATBOT_SANDBOX_ENABLED=true`。每条 bash 使用空根 Bubblewrap，仅挂载最小系统运行时、当前 workspace 和显式只读资源；同时隔离网络、PID、IPC、UTS、`/tmp` 与 `/run`。
-- macOS 或 disabled 模式仍有文件 API 边界，但 NodeExecutionEnv 的 shell 不具备操作系统级隔离，只允许用于受信任的本地开发。
+- macOS 开发：`CHATBOT_SANDBOX_ENABLED` 无效（bwrap 仅 Linux），自动回退 NodeExecutionEnv 直接执行。
+- Linux 生产：设 `CHATBOT_SANDBOX_ENABLED=true`，每条 bash 走 `bwrap`（只读系统根、读写群工作目录、默认断网 `--unshare-net`、`--die-with-parent`）。
 - 详见 `packages/sandbox/src/bwrap-args.ts`。
 
 ## 配置项

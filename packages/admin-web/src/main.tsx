@@ -10,13 +10,13 @@ import Layout from "./layout/Layout";
 import Dashboard from "./pages/Dashboard";
 import Bots from "./pages/Bots";
 import Sessions from "./pages/Sessions";
-import SessionDetail from "./pages/SessionDetailV2";
+import SessionDetail from "./pages/SessionDetail";
 import Messages from "./pages/Messages";
 import Logs from "./pages/Logs";
 import Settings from "./pages/Settings";
-import Prompts from "./pages/PromptsV2";
-import Memories from "./pages/MemoriesV2";
-import Usage from "./pages/Usage";
+import Prompts from "./pages/Prompts";
+import Memories from "./pages/Memories";
+import Skills from "./pages/Skills";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -40,7 +40,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="messages" element={<Messages />} />
               <Route path="logs" element={<Logs />} />
               <Route path="memories" element={<Memories />} />
-              <Route path="usage" element={<Usage />} />
+              <Route path="skills" element={<Skills />} />
               <Route path="prompts" element={<Prompts />} />
               <Route path="settings" element={<Settings />} />
             </Route>

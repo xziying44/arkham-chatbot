@@ -1,28 +1,27 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Model, Models } from "@earendil-works/pi-ai";
+import type { StreamFn, Skill, AgentTool } from "@earendil-works/pi-agent-core";
 import {
-	ScopeCoordinator,
+	SessionManager,
+	createSendImageTool,
+	createAskUserTool,
+	createSearchCardsTool,
+	createGenerateImageTool,
 	createLogger,
 	loadCardIndex,
-	type PromptRegistry,
+	loadSkillsFromDir,
 	type Logger,
+	type ScopeKey,
 	type IncomingMessage,
 	type IndexedCard,
 } from "@arkham/chatbot-core";
+import { createExecutionEnv } from "@arkham/chatbot-sandbox";
 import { QQAdapter, type QQConnectionState } from "@arkham/chatbot-im-qq";
 import type { ImAdapter } from "@arkham/chatbot-im-core";
-import type {
-	AgentRuntimeRepository,
-	BotRecord,
-	MessageRepository,
-	UsageRepository,
-} from "@arkham/chatbot-store";
+import type { BotRecord, MessageRepository } from "@arkham/chatbot-store";
 import { createMessageRouter } from "./message-router.ts";
 import type { BotConfig, BotRuntimeInfo } from "./bot-config.ts";
-import { createCardRenderService } from "./card-render-service.ts";
-import { createGeneralTaskService } from "./general-task-service.ts";
 
 /** 沙箱全局配置（所有机器人共享）。 */
 export interface SandboxConfig {
@@ -36,34 +35,47 @@ export interface BotManagerOptions {
 	/** 运行时数据根目录；每机器人落在 `<dataRoot>/<botId>/`。 */
 	readonly dataRoot: string;
 	readonly model: Model<any>;
+	readonly models: Models;
 	readonly streamFn: StreamFn;
 	readonly sandbox: SandboxConfig;
+	readonly sessionTtlMs: number;
+	readonly reaperIntervalMs: number;
+	/** 思考程度: off/low/medium/high/max。传给 Agent 控制思考开关与强度。 */
+	readonly thinkingLevel?: string;
 	/** 消息流水仓库（路由器入站/出站落库用）。可选。 */
 	readonly messages?: MessageRepository;
-	readonly runtime: AgentRuntimeRepository;
-	readonly usage: UsageRepository;
-	readonly prompts: PromptRegistry;
-	/** arkham-cli 二进制路径（宿主机），供制卡服务渲染卡图。 */
+	/** 技能源文件目录（宿主机绝对路径）。启动时加载，注入所有会话。 */
+	readonly skillsDir: string;
+	/** arkham-cli 二进制路径（宿主机）。技能 diy-card 用它渲染卡图。可选。 */
 	readonly arkhamBinPath?: string;
 	/** arkham-cli 资产目录（宿主机绝对路径）。可选。 */
 	readonly arkhamAssetsDir?: string;
 	/**
 	 * 卡牌数据库根目录（宿主机绝对路径，含 json/ + card_images/）。
-	 * 配置后启动时加载只读索引，由编排层完成查卡和卡图定位。
+	 * 配置后：①只读挂载到沙箱 cards-db/；②启动时加载索引供 search_cards 工具用；
+	 * ③加入 send_image 的 extraAllowedRoots（dev 模式 symlink 解析放行）。
+	 * 未配置则 search_cards 不装配。
 	 */
 	readonly cardDatabaseDir?: string;
 	/**
-	 * MiniMax 文生图配置。key 仅留在宿主机进程内，不进入任务沙箱。
+	 * MiniMax 文生图配置。配置了 apiKey 才装配 generate_image 工具。
+	 * key 仅注入工具闭包（宿主机进程内执行），不写入沙箱文件/环境变量。
 	 */
 	readonly minimax?: { readonly apiKey: string; readonly apiBase?: string };
+	/**
+	 * 启动时清除所有 scope 的对话历史（不注入 session.jsonl 到上下文）。
+	 * 用于：改了提示词/技能/系统配置后，避免旧上下文污染新行为。
+	 * memory.md（长期记忆）不受影响，仍会加载。
+	 */
+	readonly clearHistoryOnStart?: boolean;
 	readonly logger?: Logger;
-}
+	}
 
 /** 一个运行中的机器人实例：adapter + 独立 session 池 + 路由器。 */
 interface BotInstance {
 	readonly config: BotConfig;
 	readonly adapter: ImAdapter;
-	readonly sessions: ScopeCoordinator;
+	readonly sessions: SessionManager;
 	/** subscribe 返回的取消函数（disconnect 前调用）。 */
 	unsubscribe?: () => void;
 }
@@ -72,9 +84,9 @@ interface BotInstance {
  * 多机器人编排器：在一个进程内持有 N 个 QQ 机器人实例。
  *
  * 关键设计：
- * - **每机器人独立 ScopeCoordinator**：独立 dataDir 子树（`<dataRoot>/<botId>/`）、
+ * - **每机器人独立 SessionManager**：独立 dataDir 子树（`<dataRoot>/<botId>/`）、
  *   独立 persona、独立 adapter。避免改 ScopeKey、避免跨机器人键冲突。
- * - **共享全局 LLM**：model/streamFn 全局唯一（LLM 端点在设置页改）。
+ * - **共享全局 LLM**：model/models/streamFn 全局唯一（LLM 端点在设置页改）。
  * - **运行时增删改查**：addBot/reconfigureBot/removeBot 供管理端 CRUD 直接驱动。
  *   改 LLM 端点对活跃会话的影响：活跃会话持有旧 model 引用，需 reapAll 后新激活才生效。
  */
@@ -82,6 +94,8 @@ export class BotManager {
 	private readonly instances = new Map<string, BotInstance>();
 	private readonly log: Logger;
 	private readonly opts: BotManagerOptions;
+	/** 启动时从 skillsDir 加载的技能清单（所有会话共享）。 */
+	private skills: Skill[] = [];
 	/** 启动时从 cardDatabaseDir 加载的卡牌索引（所有会话共享，供 search_cards）。 */
 	private cardIndex: IndexedCard[] = [];
 
@@ -90,9 +104,29 @@ export class BotManager {
 		this.log = opts.logger ?? createLogger("bot-manager");
 	}
 
-	/** 启动：加载卡牌索引，再为每个启用的配置构建并连接实例。 */
+	/** 启动：加载技能 → 为每个 enabled 的配置构建并连接实例。失败的机器人记日志、跳过，不阻塞其它。 */
 	async start(configs: BotConfig[]): Promise<void> {
-		// 可选：加载卡牌数据库索引。失败不阻断启动，查卡能力优雅降级。
+		// 可选：启动时清除所有 scope 的对话历史（改配置后避免旧上下文污染）。
+		if (this.opts.clearHistoryOnStart) {
+			await this.markAllHistoryCleared(configs);
+		}
+		// 加载技能（所有会话共享）。目录不存在或无技能文件不报错，只是没有技能可用。
+		try {
+			const { skills, diagnostics } = await loadSkillsFromDir(this.opts.skillsDir);
+			this.skills = skills;
+			if (skills.length > 0) {
+				this.log.info("技能已加载", {
+					count: skills.length,
+					names: skills.map((s) => s.name).join(", "),
+				});
+			}
+			for (const d of diagnostics) {
+				this.log.warn("技能加载警告", { code: d.code, path: d.path, message: d.message });
+			}
+		} catch (error) {
+			this.log.warn("技能目录加载失败，技能不可用", { dir: this.opts.skillsDir, error: (error as Error).message });
+		}
+		// 可选：加载卡牌数据库索引（search_cards 工具用）。失败不阻断启动，工具不装配。
 		if (this.opts.cardDatabaseDir) {
 			try {
 				this.cardIndex = await loadCardIndex(this.opts.cardDatabaseDir, "cards-db");
@@ -112,6 +146,47 @@ export class BotManager {
 				this.log.error("机器人启动失败", { botId: cfg.id, name: cfg.name, error: (error as Error).message });
 			}
 		}
+	}
+
+	/**
+	 * 给所有 scope 目录写「清除历史」标记（.history_cleared）。
+	 * ChatBotSession 激活时会消费这个标记 → 本次不注入 session.jsonl 历史。
+	 * memory.md（长期记忆）不受影响。
+	 *
+	 * 用途：改了提示词/技能/系统配置后重启，避免旧对话上下文里的行为模式污染新配置。
+	 */
+	private async markAllHistoryCleared(configs: BotConfig[]): Promise<void> {
+		let cleared = 0;
+		for (const cfg of configs) {
+			const botDir = this.botDataDir(cfg.id);
+			// 遍历 <botDir>/<kind>/<scopeId>/ 三层结构
+			for (const kind of ["group", "user"] as const) {
+				const kindDir = join(botDir, kind);
+				let scopeIds: string[];
+				try {
+					scopeIds = await readdir(kindDir);
+				} catch {
+					continue; // 目录不存在，跳过
+				}
+				for (const scopeId of scopeIds) {
+					const flagPath = join(kindDir, scopeId, ".history_cleared");
+					try {
+						await writeFile(flagPath, String(Date.now()), "utf8");
+						cleared++;
+					} catch {
+						// 写失败不阻断启动
+					}
+				}
+			}
+		}
+		if (cleared > 0) {
+			this.log.info("启动时已标记清除对话历史", { scopes: cleared, note: "memory.md 长期记忆保留" });
+		}
+	}
+
+	/** 技能源文件目录（管理端查看技能用）。 */
+	get skillsDir(): string {
+		return this.opts.skillsDir;
 	}
 
 	/** 列出所有已加载实例的运行时信息（管理端列表用）。 */
@@ -226,11 +301,12 @@ export class BotManager {
 		return join(this.opts.dataRoot, botId);
 	}
 
-	/** 构建 adapter + 独立 ScopeCoordinator + 路由器，连接，登记。 */
+	/** 构建 adapter + 独立 SessionManager + 路由器，连接，登记。 */
 	private async buildAndConnect(config: BotConfig): Promise<void> {
 		const botDataDir = this.botDataDir(config.id);
 		await mkdir(botDataDir, { recursive: true });
 
+		// adapter 先建：sessions 的 send_image 闭包要引用它。
 		const adapter: ImAdapter = new QQAdapter({
 			appId: config.appId,
 			appSecret: config.appSecret,
@@ -238,48 +314,100 @@ export class BotManager {
 		});
 
 		const botLog = this.log.child(config.id);
-		const renderCards = this.opts.arkhamBinPath && this.opts.arkhamAssetsDir
-			? createCardRenderService({
-				arkhamBinPath: this.opts.arkhamBinPath,
-				arkhamAssetsDir: this.opts.arkhamAssetsDir,
-				minimax: this.opts.minimax,
-			})
-			: undefined;
-		const runGeneralTask = createGeneralTaskService({
-			model: this.opts.model,
-			streamFn: this.opts.streamFn,
-			prompts: this.opts.prompts,
-			sandbox: this.opts.sandbox,
-		});
-		const sessions = new ScopeCoordinator({
-			botId: config.id,
+		const sessions = new SessionManager({
 			dataDir: botDataDir,
 			model: this.opts.model,
+			models: this.opts.models,
 			streamFn: this.opts.streamFn,
-			prompts: this.opts.prompts,
-			runtime: this.opts.runtime,
-			usage: this.opts.usage,
+			envFactory: async (_scope, workspaceDir, scopeDir) =>
+				createExecutionEnv({
+					enabled: this.opts.sandbox.enabled,
+					cwd: workspaceDir,
+					networkDisabled: this.opts.sandbox.networkDisabled,
+					timeoutSeconds: this.opts.sandbox.timeoutSeconds,
+					// 只读挂载（host → 沙箱内 workspace 下固定路径）：
+					// - 历史归档 → workspace/history/（agent 可查阅但无法篡改）
+					// - 技能源目录 → workspace/skills/（agent 用 read 读 SKILL.md + 附件）
+					// - arkham-cli 资产 → workspace/.arkham/assets（DIY 卡图技能用）
+					// - arkham-cli 二进制 → workspace/.arkham/bin/arkham-cli（单文件 ro-bind）
+					// - 卡牌数据库 → workspace/cards-db/（search_cards 工具查询 + 发图）
+					// 用 workspace 下的相对路径而非 /opt/arkham/，避免 macOS 开发模式下
+					// /opt 不可写的权限问题。bwrap 的 --ro-bind 支持嵌套在 rw workspace 内。
+					readOnlyBinds: [
+						[`${scopeDir}/history`, `${workspaceDir}/history`],
+						[this.opts.skillsDir, `${workspaceDir}/skills`],
+						...(this.opts.arkhamAssetsDir ? [[this.opts.arkhamAssetsDir, `${workspaceDir}/.arkham/assets`] as const] : []),
+						...(this.opts.arkhamBinPath ? [[this.opts.arkhamBinPath, `${workspaceDir}/.arkham/bin/arkham-cli`] as const] : []),
+						...(this.opts.cardDatabaseDir ? [[this.opts.cardDatabaseDir, `${workspaceDir}/cards-db`] as const] : []),
+					],
+				}),
+			ttlMs: this.opts.sessionTtlMs,
+			reaperIntervalMs: this.opts.reaperIntervalMs,
+			thinkingLevel: this.opts.thinkingLevel,
 			persona: config.persona ?? undefined,
-			cardIndex: this.cardIndex,
-			resolveCardImage: (relativePath) => {
-				const prefix = "cards-db/";
-				if (!this.opts.cardDatabaseDir || !relativePath.startsWith(prefix)) return undefined;
-				return join(this.opts.cardDatabaseDir, relativePath.slice(prefix.length));
+			skills: this.skills,
+			extraToolsFactory: (scope, getReplyToMsgId, workspaceDir, pendingAskHolder) => {
+				// send_image 的路径映射：cards-db（沙箱内挂载点）→ 宿主真实数据库目录。
+				// 生产 bwrap 下 cards-db 只是容器内挂载点，宿主进程看不到该路径，必须映射回
+				// 宿主真实目录才能读到卡图文件并发送。
+				const pathMappings = this.opts.cardDatabaseDir
+					? [{ prefix: "cards-db", hostDir: this.opts.cardDatabaseDir }]
+					: undefined;
+				const tools: AgentTool[] = [
+					createSendImageTool({
+						scopeId: scope.id,
+						getReplyToMsgId,
+						workspaceDir,
+						pathMappings,
+						send: async (scopeId, filePath, replyToMsgId) => {
+							const scopeKey: ScopeKey = { kind: scope.kind, id: scopeId };
+							await adapter.sendImage(scopeKey, filePath, replyToMsgId);
+						},
+					}),
+					createAskUserTool({
+						getReplyToMsgId,
+						pendingAskHolder,
+						scopeKind: scope.kind,
+						sendKeyboard: async (content, keyboard, replyToMsgId) => {
+							await adapter.sendKeyboard?.(scope, content, keyboard, replyToMsgId);
+						},
+					}),
+				];
+				// search_cards：索引加载成功才装配（优雅降级）。
+				if (this.opts.cardDatabaseDir && this.cardIndex.length > 0) {
+					tools.push(createSearchCardsTool({ databaseDir: this.opts.cardDatabaseDir }));
+				}
+				// generate_image：配置了 MiniMax key 才装配（优雅降级）。
+				// 工具在宿主机进程内调 API，key 不进沙箱；生成图落到 workspace/generated/，
+				// agent 用 send_image 发送（send_image 的 workspaceDir 边界允许该目录）。
+				if (this.opts.minimax) {
+					tools.push(createGenerateImageTool({
+						apiKey: this.opts.minimax.apiKey,
+						apiBase: this.opts.minimax.apiBase,
+						workspaceDir,
+					}));
+				}
+				return tools;
 			},
-			renderCards,
-			runGeneralTask,
-			onProgress: async (scope, text, replyToMessageId) => {
+			// 中间消息：agent 在工具调用之间输出的文字立即发送，像真人边想边说。
+			onIntermediateText: (scope, text, replyToMessageId) => {
+				void adapter.sendText(scope, text, replyToMessageId).catch(() => {});
+			},
+			// send_message 工具：agent 主动调用时发送消息。
+			onSendMessage: async (scope, text, replyToMessageId) => {
 				await adapter.sendText(scope, text, replyToMessageId);
 			},
+			// 附件下载：用户发图片时下载到 scope 的 workspace/inbox/。
 			onAttachment: async (scope, attachment) => {
 				const inboxDir = join(this.botDataDir(config.id), scope.kind, scope.id, "workspace", "inbox");
 				await mkdir(inboxDir, { recursive: true });
 				const ext = attachment.filename.match(/\.[^.]+$/)?.[0] ?? ".jpg";
-				const filename = (Date.now() + "_" + attachment.filename.replace(/[^\w.-]/g, "_")).slice(0, 60) || Date.now() + ext;
+				const filename = `${Date.now()}_${attachment.filename.replace(/[^\w.-]/g, "_")}`.slice(0, 60) || `${Date.now()}${ext}`;
 				const filePath = join(inboxDir, filename);
 				const buffer = await adapter.downloadAttachment!(attachment.url);
 				await writeFile(filePath, buffer);
-				return "inbox/" + filename;
+				console.log(`[bot] 附件已下载 scope=${scope.kind}:${scope.id} → inbox/${filename} (${buffer.length} bytes)`);
+				return `inbox/${filename}`;
 			},
 		});
 		sessions.start();
