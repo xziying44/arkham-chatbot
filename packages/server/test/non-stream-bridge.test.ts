@@ -81,6 +81,7 @@ test("Anthropic 兼容端点转换完整上下文并返回思考和文本", asyn
 		assert.equal(body.model, "deepseek-v4-flash");
 		assert.equal(body.max_tokens, 1024);
 		assert.equal(body.temperature, 0.2);
+		assert.deepEqual(body.thinking, { type: "disabled" });
 		assert.ok(!("stream" in body));
 		assert.deepEqual(body.messages, [
 			{ role: "user", content: "查一下" },
@@ -212,6 +213,7 @@ test("OpenAI 兼容端点转换完整上下文和响应事件", async (t) => {
 		assert.equal(body.model, "deepseek-chat");
 		assert.equal(body.max_tokens, 1024);
 		assert.equal(body.temperature, 0.2);
+		assert.deepEqual(body.thinking, { type: "disabled" });
 		assert.ok(!("stream" in body));
 		assert.deepEqual(body.messages, [
 			{ role: "system", content: "测试系统提示词" },

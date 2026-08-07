@@ -562,6 +562,8 @@ function buildAnthropicRequestBody(
 		model: model.id,
 		max_tokens: (options as { maxTokens?: number } | undefined)?.maxTokens ?? model.maxTokens ?? 8192,
 		messages,
+		// 非流式桥接用于绕过兼容端点的 SSE 问题，显式关闭推理，避免服务端默认开启后耗尽输出上限。
+		thinking: { type: "disabled" },
 	};
 	if (context.systemPrompt) body.system = context.systemPrompt;
 
@@ -638,7 +640,12 @@ function buildRequestBody(
 		}
 	}
 
-	const body: Record<string, unknown> = { model: model.id, messages };
+	const body: Record<string, unknown> = {
+		model: model.id,
+		messages,
+		// 非流式桥接用于绕过兼容端点的 SSE 问题，显式关闭推理，避免服务端默认开启后耗尽输出上限。
+		thinking: { type: "disabled" },
+	};
 
 	const opts = options as { maxTokens?: number; temperature?: number } | undefined;
 	if (opts?.maxTokens) body.max_tokens = opts.maxTokens;
