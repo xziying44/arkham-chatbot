@@ -105,8 +105,8 @@ export interface WsGatewayInfo {
 /** getAppAccessToken 响应。 */
 export interface AccessTokenResponse {
 	access_token: string;
-	/** 过期时间戳（秒）。 */
-	expires_in: number;
+	/** 有效期（秒）。QQ 线上接口实际可能返回数字字符串。 */
+	expires_in: number | string;
 }
 
 /** 发消息响应（普通）。 */
@@ -220,4 +220,3 @@ export interface KeyboardPayload {
 		rows: { buttons: KeyboardButton[] }[];
 	};
 }
-

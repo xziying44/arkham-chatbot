@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "test": "echo \"no tests yet\""
+    "test": "node --test test/*.test.ts"
   },
   "dependencies": {
     "@arkham/chatbot-core": "workspace:*",

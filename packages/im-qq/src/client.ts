@@ -49,6 +49,7 @@ export interface QQClientOptions {
 }
 
 const REFRESH_LEAD_TIME_S = 60;
+const ACCESS_TOKEN_EXPIRED_CODE = 11244;
 
 export class QQClient {
 	private readonly opts: Required<QQClientOptions>;
@@ -113,8 +114,15 @@ export class QQClient {
 			throw new Error(`getAppAccessToken failed: ${res.status} ${await res.text()}`);
 		}
 		const data = (await res.json()) as AccessTokenResponse;
+		const expiresIn = Number(data.expires_in);
+		if (typeof data.access_token !== "string" || data.access_token.length === 0) {
+			throw new Error("QQ access_token 响应缺少有效令牌");
+		}
+		if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
+			throw new Error("QQ access_token 响应的有效期无效");
+		}
 		this.accessToken = data.access_token;
-		this.expiresAt = Math.floor(Date.now() / 1000) + data.expires_in;
+		this.expiresAt = Math.floor(Date.now() / 1000) + Math.floor(expiresIn);
 		return data.access_token;
 	}
 
@@ -252,19 +260,15 @@ export class QQClient {
 	}
 
 	private async authedGet(path: string): Promise<Response> {
-		const token = await this.getAccessToken();
-		return this.fetchWithTimeout(`${this.opts.apiBase}${path}`, {
+		return this.authedRequest(path, {
 			method: "GET",
-			headers: { Authorization: `QQBot ${token}` },
 		});
 	}
 
 	private async authedPost(path: string, body: unknown): Promise<Response> {
-		const token = await this.getAccessToken();
-		return this.fetchWithTimeout(`${this.opts.apiBase}${path}`, {
+		return this.authedRequest(path, {
 			method: "POST",
 			headers: {
-				Authorization: `QQBot ${token}`,
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify(body),
@@ -272,15 +276,46 @@ export class QQClient {
 	}
 
 	private async authedPut(path: string, body: unknown): Promise<Response> {
-		const token = await this.getAccessToken();
-		return this.fetchWithTimeout(`${this.opts.apiBase}${path}`, {
+		return this.authedRequest(path, {
 			method: "PUT",
 			headers: {
-				Authorization: `QQBot ${token}`,
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify(body),
 		});
+	}
+
+	/** 鉴权请求遇到服务端判定令牌过期时，强制刷新并重试一次。 */
+	private async authedRequest(path: string, init: RequestInit): Promise<Response> {
+		let token = await this.getAccessToken();
+		let res = await this.fetchAuthenticated(path, init, token);
+		if (!(await this.isAccessTokenExpiredResponse(res))) return res;
+
+		// 仅清除本次请求使用的旧令牌，避免覆盖其他并发请求刚刷新的新令牌。
+		if (this.accessToken === token) {
+			this.accessToken = undefined;
+			this.expiresAt = 0;
+		}
+		console.warn("[qq-client] access_token 已失效，刷新后重试请求");
+		token = await this.getAccessToken();
+		res = await this.fetchAuthenticated(path, init, token);
+		return res;
+	}
+
+	private fetchAuthenticated(path: string, init: RequestInit, token: string): Promise<Response> {
+		const headers = new Headers(init.headers);
+		headers.set("Authorization", `QQBot ${token}`);
+		return this.fetchWithTimeout(`${this.opts.apiBase}${path}`, { ...init, headers });
+	}
+
+	private async isAccessTokenExpiredResponse(res: Response): Promise<boolean> {
+		if (res.ok) return false;
+		try {
+			const data = (await res.clone().json()) as { code?: unknown; err_code?: unknown };
+			return Number(data.code) === ACCESS_TOKEN_EXPIRED_CODE || Number(data.err_code) === ACCESS_TOKEN_EXPIRED_CODE;
+		} catch {
+			return false;
+		}
 	}
 
 	private fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
