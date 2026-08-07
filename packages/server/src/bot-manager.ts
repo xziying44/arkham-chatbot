@@ -53,7 +53,7 @@ export interface BotManagerOptions {
 	/**
 	 * 卡牌数据库根目录（宿主机绝对路径，含 json/ + card_images/）。
 	 * 配置后：①只读挂载到沙箱 cards-db/；②启动时加载索引供 search_cards 工具用；
-	 * ③加入 send_image 的 extraAllowedRoots（dev 模式 symlink 解析放行）。
+	 * ③加入 send_image 的宿主路径映射与额外只读根。
 	 * 未配置则 search_cards 不装配。
 	 */
 	readonly cardDatabaseDir?: string;

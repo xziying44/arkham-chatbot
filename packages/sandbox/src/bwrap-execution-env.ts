@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { access, constants } from "node:fs/promises";
-import { resolve, isAbsolute } from "node:path";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { ExecutionError, err, ok, toError } from "@earendil-works/pi-agent-core";
 import type { Result, ShellExecOptions } from "@earendil-works/pi-agent-core";
@@ -9,10 +9,9 @@ import { buildBwrapArgs, type BwrapOptions } from "./bwrap-args.ts";
 /**
  * 基于 Bubblewrap 的沙箱执行环境。
  *
- * 继承 {@link NodeExecutionEnv} 复用全部文件系统方法（它们直接作用于宿主的群工作目录，
- * 无需沙箱化），**仅覆写 {@link exec}**：每条 bash 命令都被 `bwrap` 包裹进独立的 Linux
- * namespace（只读系统、读写群目录、断网、随宿主退出）执行。这样 pi 的 `createBashTool`
- * 注入此 env 后，所有网友触发的命令自动获得隔离，而 read/edit/write 仍零开销直达。
+ * 继承 {@link NodeExecutionEnv} 复用文件系统实现，并覆写 {@link exec}：每条 bash 命令都被
+ * `bwrap` 包裹进独立 Linux namespace。文件系统边界由外层 ScopedExecutionEnv 统一执行，
+ * 不能直接把本类暴露给不可信 agent。
  *
  * 与父类的唯一行为差异在 exec 的命令执行边界；超时、abort、stdout/stderr 捕获语义保持一致。
  */
@@ -33,14 +32,14 @@ export class BwrapExecutionEnv extends NodeExecutionEnv {
 	private readonly sandboxShellEnv: NodeJS.ProcessEnv | undefined;
 
 	constructor(options: BwrapExecutionEnvOptions) {
-		super({ cwd: options.cwd, shellPath: options.shellPath, shellEnv: options.shellEnv });
+		const workspace = resolve(options.workspace);
+		super({ cwd: workspace, shellPath: options.shellPath, shellEnv: options.shellEnv });
 		this.sandboxShellEnv = options.shellEnv;
-		// bwrap 配置：剥离 cwd/shell 等非 bwrap 字段。
+		const nodeRuntimeBinds = runtimeBindsForNode(process.execPath);
 		this.bwrap = {
-			workspace: options.workspace,
+			workspace,
 			networkDisabled: options.networkDisabled,
-			readOnlyBinds: options.readOnlyBinds,
-			writableBinds: options.writableBinds,
+			readOnlyBinds: [...nodeRuntimeBinds, ...(options.readOnlyBinds ?? [])],
 		};
 		this.sandboxShellPath = options.shellPath ?? "/bin/bash";
 	}
@@ -49,11 +48,11 @@ export class BwrapExecutionEnv extends NodeExecutionEnv {
 		command: string,
 		options?: ShellExecOptions,
 	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
-		if (options?.abortSignal?.aborted) return err(new ExecutionError("aborted", "aborted"));
+		if (options?.abortSignal?.aborted) return err(new ExecutionError("aborted", "命令已取消"));
 
 		const timeoutSec = options?.timeout;
 		if (timeoutSec !== undefined && (!Number.isFinite(timeoutSec) || timeoutSec <= 0)) {
-			return err(new ExecutionError("timeout", "Invalid timeout: must be a finite number of seconds"));
+			return err(new ExecutionError("timeout", "超时时间必须是有限的正数秒"));
 		}
 		const timeoutMs = timeoutSec !== undefined ? timeoutSec * 1000 : undefined;
 
@@ -62,13 +61,13 @@ export class BwrapExecutionEnv extends NodeExecutionEnv {
 			await access(cwd, constants.F_OK);
 		} catch (error) {
 			return err(
-				new ExecutionError("spawn_error", `Working directory does not exist: ${cwd}`, toError(error)),
+				new ExecutionError("spawn_error", `工作目录不存在：${cwd}`, toError(error)),
 			);
 		}
 
-		// 组装：bwrap <args...> <shell> -c "<command>"
-		const bwrapArgs = buildBwrapArgs({ ...this.bwrap, workspace: cwd });
-		const argv = [...bwrapArgs, this.sandboxShellPath, "-c", command];
+		// workspace 始终是唯一读写挂载；cwd 只决定命令进入后的目录。
+		const bwrapArgs = buildBwrapArgs(this.bwrap);
+		const argv = [...bwrapArgs, "--chdir", cwd, this.sandboxShellPath, "-c", command];
 
 		return await new Promise((resolvePromise) => {
 			let stdout = "";
@@ -94,7 +93,7 @@ export class BwrapExecutionEnv extends NodeExecutionEnv {
 					try {
 						process.kill(child.pid, "SIGKILL");
 					} catch {
-						/* already dead */
+						/* 进程已经退出。 */
 					}
 				}
 			};
@@ -102,12 +101,22 @@ export class BwrapExecutionEnv extends NodeExecutionEnv {
 			const onAbort = () => killTree();
 
 			try {
+				const requestedEnv = options?.inheritEnv === false
+					? { ...this.sandboxShellEnv, ...options?.env }
+					: { ...process.env, ...this.sandboxShellEnv, ...options?.env };
 				child = spawn(BWRAP_BIN, argv, {
 					cwd,
 					detached: true,
-					env: options?.inheritEnv === false
-						? { ...this.sandboxShellEnv, ...options?.env }
-						: { ...process.env, ...this.sandboxShellEnv, ...options?.env },
+					env: {
+						...requestedEnv,
+						HOME: this.bwrap.workspace,
+						TMPDIR: "/tmp",
+						TMP: "/tmp",
+						TEMP: "/tmp",
+						XDG_CACHE_HOME: `${this.bwrap.workspace}/.cache`,
+						XDG_CONFIG_HOME: `${this.bwrap.workspace}/.config`,
+						XDG_DATA_HOME: `${this.bwrap.workspace}/.local/share`,
+					},
 					stdio: ["ignore", "pipe", "pipe"],
 				});
 			} catch (error) {
@@ -143,11 +152,11 @@ export class BwrapExecutionEnv extends NodeExecutionEnv {
 			});
 			child.once("close", (code) => {
 				if (timedOut) {
-					settle(err(new ExecutionError("timeout", `timeout:${options?.timeout}`)));
+					settle(err(new ExecutionError("timeout", `命令执行超时：${options?.timeout} 秒`)));
 					return;
 				}
 				if (options?.abortSignal?.aborted) {
-					settle(err(new ExecutionError("aborted", "aborted")));
+					settle(err(new ExecutionError("aborted", "命令已取消")));
 					return;
 				}
 				settle(ok({ stdout, stderr, exitCode: code ?? 0 }));
@@ -158,4 +167,18 @@ export class BwrapExecutionEnv extends NodeExecutionEnv {
 	private resolveCwd(path: string): string {
 		return isAbsolute(path) ? resolve(path) : resolve(this.cwd, path);
 	}
+}
+
+/** NVM 等非系统 Node 运行时需要显式只读挂载，确保 PATH 中的 node 仍可用。 */
+function runtimeBindsForNode(execPath: string): readonly (readonly [string, string])[] {
+	const normalized = resolve(execPath);
+	if (isWithin("/usr", normalized) || isWithin("/bin", normalized)) return [];
+	const runtimeRoot = dirname(dirname(normalized));
+	return [[runtimeRoot, runtimeRoot]];
+}
+
+function isWithin(root: string, candidate: string): boolean {
+	const normalizedRoot = resolve(root);
+	const normalizedCandidate = resolve(candidate);
+	return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}${sep}`);
 }

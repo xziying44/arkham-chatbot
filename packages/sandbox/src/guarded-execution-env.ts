@@ -5,8 +5,8 @@ import { sanitizeShellEnv } from "./sanitize-shell-env.ts";
 /**
  * 命令审查包装器：在任何 {@link ExecutionEnv} 之上拦截 exec，执行前先过安全审查。
  *
- * 文件系统方法（read/write/listDir 等）原样透传——它们作用于每群持久工作目录，
- * 且 read 工具只读文本，无需额外拦截。只对 shell exec 做命令模式审查。
+ * 文件系统方法原样透传，因此 inner 必须是 ScopedExecutionEnv 等已经实施硬边界的实现。
+ * 本类只负责命令模式审查和环境变量净化，不单独承担文件隔离。
  *
  * 用法（env-factory 里）：所有由工厂产出的 env 都套一层 GuardedExecutionEnv，
  * 保证生产（bwrap）和开发（NodeExecutionEnv）统一获得命令护栏。
@@ -31,7 +31,7 @@ export class GuardedExecutionEnv implements ExecutionEnv {
 				ok: true as const,
 				value: {
 					stdout: "",
-					stderr: `🚫 ${decision.reason}\n`,
+					stderr: `[沙箱拒绝] ${decision.reason}\n`,
 					exitCode: 126, // 126 借用语义：command found but not executable
 				},
 			});
@@ -93,6 +93,6 @@ export class GuardedExecutionEnv implements ExecutionEnv {
 		return this.inner.createTempFile(options);
 	}
 	async cleanup(): Promise<void> {
-		await this.inner.cleanup?.();
+		await this.inner.cleanup();
 	}
 }
