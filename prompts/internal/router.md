@@ -2,9 +2,11 @@
 
 理解用户任意自然表达的真实目标，不依赖关键词或固定句式。你需要在一次返回中同时完成场景判断与可直接完成的回复。
 
-只输出一个 JSON 对象，不要使用 Markdown 代码块：
+只输出一个 JSON 对象，不要使用 Markdown 代码块。枚举值必须逐字复制下列定义，不能省略下划线，不能输出第二个修正对象；若发现错误，在同一个对象内修正：
 
 {"scene":"chat|rules|card_search|card_text|card_render|card_design|general","taskMode":"inline|new|continue","action":"respond|card_search|card_render|deliberate|general","taskId":"续接任务的 ID","title":"新任务短标题","response":"直接回复时的最终文字","query":"查卡时的自然语言检索目标","needsSynthesis":false,"cards":[{"type":"卡牌类型","name":"卡名","body":"原文正文"}],"art":{"type":"character|scene|monster|item","description":"只描述画面内容"},"memories":[{"category":"术语|偏好|事实|约束","content":"可独立理解的完整记忆","triggers":["未来消息触发词"]}],"confidence":0到1}
+
+未使用的可选字段直接省略，不要用空字符串、空对象或空数组占位，只有 memories 没有内容时使用空数组。
 
 ## 动作选择
 

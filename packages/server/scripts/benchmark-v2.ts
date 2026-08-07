@@ -32,7 +32,8 @@ try {
 	].join("\n");
 	const cases = [
 		{ name: "问候", text: "晚上好呀" },
-		{ name: "自然查卡", text: "想瞅瞅那张叫大砍刀的牌具体写了啥" },
+		{ name: "能力说明", text: "你平常能帮我干些什么？" },
+		{ name: "自然查卡", text: "查找一下黛西调查员" },
 		{ name: "语法", text: "这段话读起来有点绕，帮我捋成官方口吻，只动表述别动任何数值：补给阶段开始时从弃牌堆底下三张里拿一张。" },
 		{ name: "平衡", text: "我总觉得这个能力有点离谱，你给掂量掂量强度，但先别替我改。" },
 		{
@@ -61,9 +62,17 @@ try {
 			assert.equal(result.plan.scene, "chat");
 			assert.equal(result.plan.action, "respond");
 		}
+		if (item.name === "能力说明") {
+			assert.equal(result.plan.scene, "chat");
+			assert.equal(result.plan.action, "respond");
+			assert.ok(result.plan.response?.includes("查卡"));
+			assert.ok(result.plan.response?.includes("规则"));
+			assert.ok(result.plan.response?.includes("制卡"));
+		}
 		if (item.name === "自然查卡") {
 			assert.equal(result.plan.scene, "card_search");
 			assert.equal(result.plan.action, "card_search");
+			assert.ok(result.plan.query?.includes("黛西"));
 		}
 		if (item.name === "语法") {
 			assert.equal(result.plan.scene, "card_text");
@@ -107,6 +116,7 @@ try {
 			action: result.plan.action,
 			taskMode: result.plan.taskMode,
 			query: result.plan.query,
+			response: result.plan.response,
 			responseLength: result.plan.response?.length ?? 0,
 			input: result.message.usage.input,
 			cacheRead: result.message.usage.cacheRead,

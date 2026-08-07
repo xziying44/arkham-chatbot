@@ -23,11 +23,23 @@ test("回合规划：解析模型语义判断，不依赖用户句式", () => {
 	assert.equal(corrected.taskMode, "new");
 });
 
-test("回合规划：模型偶发返回纯文本时直接作为回复降级", () => {
-	const result = parseTurnPlan("你好，需要我查卡还是制卡？");
+test("回合规划：容错解析多个对象和紧凑枚举", () => {
+	const result = parseTurnPlan([
+		'{"scene":"cardsearch","taskMode":"inline","action":"cardsearch","respond":"","query":"黛西"}',
+		'{"scene":"cardsearch","taskMode":"inline","action":"cardsearch","query":"黛西","response":"","confidence":0.8}',
+	].join("\n"));
+	assert.equal(result.scene, "card_search");
+	assert.equal(result.action, "card_search");
+	assert.equal(result.query, "黛西");
+	assert.equal(result.confidence, 0.8);
+});
+
+test("回合规划：损坏的规划结果不会作为用户回复外泄", () => {
+	const result = parseTurnPlan('{"scene":"card_search"');
 	assert.equal(result.action, "respond");
-	assert.equal(result.response, "你好，需要我查卡还是制卡？");
-	assert.equal(result.confidence, 0.3);
+	assert.equal(result.response, "我刚才没能正确理解这条消息，请再试一次。");
+	assert.equal(result.response?.includes("scene"), false);
+	assert.equal(result.confidence, 0);
 });
 
 test("提示词注册表：热重载原子替换且旧快照保持不变", async () => {
@@ -188,6 +200,62 @@ test("ScopeCoordinator：规划器已有完整分析时不重复调用模型", a
 
 	assert.equal(reply.text, "这个能力的资源效率偏高，但暂时不改数值。");
 	assert.equal(fallbackCalls, 0);
+	assert.equal(usage.summary().modelCalls, 1);
+	await coordinator.shutdown();
+	db.close();
+});
+
+test("ScopeCoordinator：查卡直接返回首张卡图而不追加模型调用", async () => {
+	const db = await openDb(":memory:");
+	const usage = new UsageRepository(db);
+	const coordinator = new ScopeCoordinator({
+		botId: "b1",
+		dataDir: "/tmp/coordinator-search-test",
+		model: fakeModel(),
+		streamFn: (() => { throw new Error("查卡后不应再次调用模型"); }) as never,
+		prompts: {} as PromptRegistry,
+		runtime: new AgentRuntimeRepository(db),
+		usage,
+		cardIndex: [{
+			arkhamdb_id: "01002",
+			name_zh: "黛西·沃克",
+			category: "玩家卡",
+			cycle: "基础游戏",
+			type: "调查员",
+			class: "探求者",
+			traits: ["米斯卡塔尼克"],
+			submit_icon: [],
+			faces: [{ face: "a", imageFile: "cards-db/card_images/01002_a.jpg", type: "调查员" }],
+		}],
+		resolveCardImage: (path) => "/card-database/" + path,
+		planner: {
+			async plan() {
+				return {
+					plan: {
+						scene: "card_search" as const,
+						taskMode: "inline" as const,
+						action: "card_search" as const,
+						query: "黛西",
+						confidence: 1,
+					},
+					message: assistant("查卡规划", "anthropic-messages"),
+					promptHash: "test",
+					durationMs: 1,
+				};
+			},
+		},
+	});
+	const reply = await coordinator.dispatch({
+		scope: { kind: "user", id: "u1" },
+		text: "查找一下黛西调查员",
+		senderId: "u1",
+		senderName: "测试者",
+		mentioned: true,
+		platformMessageId: "m1",
+	});
+
+	assert.match(reply.text, /黛西·沃克/);
+	assert.deepEqual(reply.images, ["/card-database/cards-db/card_images/01002_a.jpg"]);
 	assert.equal(usage.summary().modelCalls, 1);
 	await coordinator.shutdown();
 	db.close();

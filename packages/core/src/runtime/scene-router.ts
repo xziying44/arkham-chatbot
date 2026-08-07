@@ -89,21 +89,18 @@ export class TurnPlanner {
 }
 
 export function parseTurnPlan(rawText: string): TurnPlan {
-	const text = unwrapCodeFence(rawText.trim());
-	try {
-		const value = JSON.parse(text) as Record<string, unknown>;
-		const action = ACTIONS.has(String(value.action)) ? String(value.action) as TurnAction : "respond";
-		const parsedScene = SCENES.has(String(value.scene)) ? String(value.scene) as SceneId : "chat";
+	const value = parsePlannerObject(rawText);
+	if (value) {
+		const parsedScene = enumValue(value.scene, SCENES) ?? "chat";
+		const action = enumValue(value.action, ACTIONS) ?? actionForScene(parsedScene);
 		const scene = sceneForAction(action, parsedScene);
-		const parsedTaskMode = TASK_MODES.has(String(value.taskMode)) ? String(value.taskMode) as TaskMode : "inline";
+		const parsedTaskMode = enumValue(value.taskMode ?? value.task_mode, TASK_MODES) ?? "inline";
 		const taskMode = taskModeForAction(action, parsedTaskMode);
 		const confidenceValue = Number(value.confidence);
 		const confidence = Number.isFinite(confidenceValue)
 			? Math.min(1, Math.max(0, confidenceValue))
 			: 0.5;
-		const response = typeof value.response === "string" && value.response.trim()
-			? value.response.trim()
-			: undefined;
+		const response = stringValue(value.response) ?? stringValue(value.respond);
 		const query = typeof value.query === "string" && value.query.trim()
 			? value.query.trim()
 			: undefined;
@@ -122,21 +119,102 @@ export function parseTurnPlan(rawText: string): TurnPlan {
 			query,
 			taskId,
 			title,
-			needsSynthesis: value.needsSynthesis === true,
+			needsSynthesis: (value.needsSynthesis ?? value.needs_synthesis) === true,
 			cards,
 			art,
 			memories,
 			confidence,
 		};
-	} catch {
-		return {
-			scene: "chat",
-			taskMode: "inline",
-			action: "respond",
-			response: rawText.trim() || "我没能理解这条消息，请换一种说法。",
-			confidence: 0.3,
-		};
 	}
+	return {
+		scene: "chat",
+		taskMode: "inline",
+		action: "respond",
+		response: "我刚才没能正确理解这条消息，请再试一次。",
+		confidence: 0,
+	};
+}
+
+function parsePlannerObject(rawText: string): Record<string, unknown> | undefined {
+	const text = unwrapCodeFence(rawText.trim());
+	const direct = parseJsonObject(text);
+	if (direct) return direct;
+	const candidates = extractJsonObjects(text);
+	for (let index = candidates.length - 1; index >= 0; index--) {
+		const parsed = parseJsonObject(candidates[index]);
+		if (parsed) return parsed;
+	}
+	return undefined;
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+	try {
+		const value = JSON.parse(text) as unknown;
+		return value && typeof value === "object" && !Array.isArray(value)
+			? value as Record<string, unknown>
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function extractJsonObjects(text: string): string[] {
+	const candidates: string[] = [];
+	let start = -1;
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = 0; index < text.length; index++) {
+		const character = text[index];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (character === "\\") escaped = true;
+			else if (character === "\"") inString = false;
+			continue;
+		}
+		if (character === "\"") {
+			inString = true;
+			continue;
+		}
+		if (character === "{") {
+			if (depth === 0) start = index;
+			depth++;
+			continue;
+		}
+		if (character !== "}" || depth === 0) continue;
+		depth--;
+		if (depth === 0 && start >= 0) {
+			candidates.push(text.slice(start, index + 1));
+			start = -1;
+		}
+	}
+	return candidates;
+}
+
+function enumValue<T extends string>(value: unknown, values: ReadonlyMap<string, T>): T | undefined {
+	return typeof value === "string" ? values.get(compactEnum(value)) : undefined;
+}
+
+function compactEnum(value: string): string {
+	let compact = "";
+	for (const character of value.trim().toLowerCase()) {
+		if (character === "_" || character === "-" || character === " " || character === "\t" || character === "\r" || character === "\n") {
+			continue;
+		}
+		compact += character;
+	}
+	return compact;
+}
+
+function enumMap<T extends string>(values: readonly T[]): ReadonlyMap<string, T> {
+	return new Map(values.map((value) => [compactEnum(value), value]));
+}
+
+function actionForScene(scene: SceneId): TurnAction {
+	if (scene === "card_search") return "card_search";
+	if (scene === "card_render") return "card_render";
+	if (scene === "general") return "general";
+	return "respond";
 }
 
 function sceneForAction(action: TurnAction, scene: SceneId): SceneId {
@@ -195,7 +273,7 @@ function unwrapCodeFence(text: string): string {
 	return text.slice(firstLineEnd + 1, lastFence).trim();
 }
 
-const SCENES = new Set<string>(["chat", "rules", "card_search", "card_text", "card_render", "card_design", "general"]);
-const TASK_MODES = new Set<string>(["inline", "new", "continue"]);
-const ACTIONS = new Set<string>(["respond", "card_search", "card_render", "deliberate", "general"]);
+const SCENES = enumMap<SceneId>(["chat", "rules", "card_search", "card_text", "card_render", "card_design", "general"]);
+const TASK_MODES = enumMap<TaskMode>(["inline", "new", "continue"]);
+const ACTIONS = enumMap<TurnAction>(["respond", "card_search", "card_render", "deliberate", "general"]);
 const ART_TYPES = new Set<string>(["character", "scene", "monster", "item"]);
