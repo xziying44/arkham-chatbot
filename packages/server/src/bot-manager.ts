@@ -65,7 +65,6 @@ export interface BotManagerOptions {
 	/**
 	 * 启动时清除所有 scope 的对话历史（不注入 session.jsonl 到上下文）。
 	 * 用于：改了提示词/技能/系统配置后，避免旧上下文污染新行为。
-	 * memory.md（长期记忆）不受影响，仍会加载。
 	 */
 	readonly clearHistoryOnStart?: boolean;
 	readonly logger?: Logger;
@@ -151,7 +150,6 @@ export class BotManager {
 	/**
 	 * 给所有 scope 目录写「清除历史」标记（.history_cleared）。
 	 * ChatBotSession 激活时会消费这个标记 → 本次不注入 session.jsonl 历史。
-	 * memory.md（长期记忆）不受影响。
 	 *
 	 * 用途：改了提示词/技能/系统配置后重启，避免旧对话上下文里的行为模式污染新配置。
 	 */
@@ -180,7 +178,7 @@ export class BotManager {
 			}
 		}
 		if (cleared > 0) {
-			this.log.info("启动时已标记清除对话历史", { scopes: cleared, note: "memory.md 长期记忆保留" });
+			this.log.info("启动时已标记清除对话历史", { scopes: cleared });
 		}
 	}
 

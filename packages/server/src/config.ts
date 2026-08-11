@@ -25,7 +25,7 @@ export interface AppConfig {
 	/** 思考程度默认值: off/low/medium/high/max。管理端可改。 */
 	readonly thinkingLevel: string;
 	readonly sandbox: { enabled: boolean; networkDisabled: boolean; timeoutSeconds: number };
-	/** 运行时数据根目录（机器人工作区、session.jsonl、memory.md）。 */
+	/** 运行时数据根目录（机器人工作区、session.jsonl）。 */
 	readonly dataDir: string;
 	/** 技能源文件目录（SKILL.md 所在目录），启动时加载注入所有会话。 */
 	readonly skillsDir: string;

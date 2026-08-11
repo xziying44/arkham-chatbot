@@ -23,17 +23,11 @@ export function buildSystemPrompt(options: {
 	scopeName: string;
 	scopeKind: "group" | "user";
 	persona?: string;
-	/** 会话摘要（memory.md，回收时由 generateSummary 生成）。 */
-	memory?: string;
-	/** 记忆索引（MEMORY.md 全文，列出自管理记忆文件的标题+钩子）。 */
-	memoryIndex?: string;
-	/** 激活时加载的历史消息数（让 agent 知道有多少上下文在内存里）。 */
-	recentMessageCount?: number;
 	/** formatSkillsForSystemPrompt 的输出（已格式化好的技能清单 XML 块）。空则不输出技能段。 */
 	skillsBlock?: string;
 	tools: AgentTool[];
 }): string {
-	const { scopeName, scopeKind, persona, memory, memoryIndex, recentMessageCount, skillsBlock } = options;
+	const { scopeName, scopeKind, persona, skillsBlock } = options;
 	const isGroup = scopeKind === "group";
 
 	const lines: string[] = [];
@@ -130,50 +124,30 @@ export function buildSystemPrompt(options: {
 	lines.push("- 禁用：代码块（``` 和缩进代码）、表格、三级及以上标题。这些不会被渲染，直接用纯文本或加粗替代。");
 	lines.push("- 展示命令或代码时，用普通文字或加粗，不要用代码块。");
 
-	// ---- 长期记忆区（始终展示，让 agent 知道记忆机制）----
-	// 三层：
-	// 1) 历史上下文：已加载的消息数（agent 知道有多少近期对话在内存里）
-	// 2) 会话摘要（memory.md，回收时自动生成）：上次会话的要点
-	// 3) 记忆索引（workspace/memories/MEMORY.md，agent 自管理）：关键事实清单
-	// 4) 记忆使用指引：怎么用 read/write/edit 操作 memories/ 目录
+	// ---- 跨会话保留区（始终展示，让 agent 知道机制）----
+	// 会话续接靠 session.jsonl 里的历史消息（含压缩摘要消息——压缩接入后），
+	// 不再向 system prompt 注入任何动态记忆内容，让 system prompt 保持纯静态
+	// 以最大化 prompt cache 命中率。这里只保留机制说明 + 自管理记忆指引。
 	lines.push("");
-	lines.push("## 长期记忆（跨会话保留）");
-	if (recentMessageCount && recentMessageCount > 0) {
-		lines.push(`已加载此前 ${recentMessageCount} 条消息记录作为上下文，你能看到最近的对话。`);
-	} else {
-		lines.push("这是新会话，暂无历史记录。");
-	}
-	if (memory) {
-		lines.push("");
-		lines.push("### 上次会话摘要（系统自动生成，请勿手动修改）");
-		lines.push(memory);
-	}
+	lines.push("## 跨会话保留");
 	lines.push("");
-	lines.push("### 自管理记忆");
-	lines.push("你的工作目录下有 `memories/` 目录，用于跨会话保留关键信息。每条记忆是一个 markdown 文件，`memories/MEMORY.md` 是索引。");
+	lines.push("### 自管理任务档案");
+	lines.push("你的工作目录下有 `memories/` 目录，用于跨会话保留需要长期跟踪的关键信息（如连做几天的复杂制卡任务详情）。每条记忆是一个 markdown 文件，`memories/MEMORY.md` 是索引。");
 	lines.push("- **读记忆**：用 read 工具读 `memories/MEMORY.md`（索引）或 `memories/<某文件>.md`（详情）。");
 	lines.push("- **写/更新记忆**：用 write 工具写 `memories/<名称>.md`（含 frontmatter：name/description/type + 正文），并同步更新 `memories/MEMORY.md` 索引（一行：`- [标题](文件.md) — 钩子`）。");
 	lines.push("- **改/删**：用 edit 改、用 bash 删除并更新索引。");
-	if (memoryIndex) {
-		lines.push("");
-		lines.push("#### 当前记忆索引（下次激活时也会加载这份）");
-		lines.push(memoryIndex);
+	lines.push("");
+	lines.push("### 历史对话归档（只读）");
+	lines.push("工作目录下有 `history/` 目录，按天归档了过往的对话记录（`history/YYYY-MM-DD.jsonl`，每行一条 JSON 消息）。这是**只读**的——你可以用 read 工具查阅某天的对话，但不能修改。当用户问「之前聊过什么」「上次说的那个事」时，去 history/ 里翻对应日期的文件。");
+	lines.push("");
+	lines.push("#### 何时该记");
+	if (isGroup) {
+		lines.push("- **该记**：群员的身份/偏好（如「小银喜欢简洁回答」）、进行中的任务/约定、用户反馈的做事方式、群的整体约定/氛围。");
+		lines.push("- **记用户信息时带上 openid**：QQ 群消息没有昵称，你靠 openid 识别不同群员。当记忆涉及具体某个人时，正文里记下对方的 openid（消息前缀 `[openid]:` 里的那串），这样下次能靠 openid 匹配到人。不涉及具体人的记忆（如群的整体约定）不需要 openid。");
 	} else {
-		lines.push("");
-		lines.push("目前 `memories/` 为空（或无索引）。发现值得长期记住的事时，创建记忆文件并维护索引。");
-		}
-		lines.push("");
-		lines.push("### 历史对话归档（只读）");
-		lines.push("工作目录下有 `history/` 目录，按天归档了过往的对话记录（`history/YYYY-MM-DD.jsonl`，每行一条 JSON 消息）。这是**只读**的——你可以用 read 工具查阅某天的对话，但不能修改。当用户问「之前聊过什么」「上次说的那个事」时，去 history/ 里翻对应日期的文件。");
-		lines.push("");
-		lines.push("#### 何时该记");
-		if (isGroup) {
-			lines.push("- **该记**：群员的身份/偏好（如「小银喜欢简洁回答」）、进行中的任务/约定、用户反馈的做事方式、群的整体约定/氛围。");
-			lines.push("- **记用户信息时带上 openid**：QQ 群消息没有昵称，你靠 openid 识别不同群员。当记忆涉及具体某个人时，正文里记下对方的 openid（消息前缀 `[openid]:` 里的那串），这样下次能靠 openid 匹配到人。不涉及具体人的记忆（如群的整体约定）不需要 openid。");
-		} else {
-			lines.push("- **该记**：用户的身份/偏好（如「喜欢简洁回答」）、进行中的任务/约定、用户反馈的做事方式。");
-		}
-		lines.push("- **不该记**：一次性问答、能从代码/文件推出的信息、本会话的临时上下文。");
+		lines.push("- **该记**：用户的身份/偏好（如「喜欢简洁回答」）、进行中的任务/约定、用户反馈的做事方式。");
+	}
+	lines.push("- **不该记**：一次性问答、能从代码/文件推出的信息、本会话的临时上下文。");
 	lines.push("- 信息变化时更新对应记忆文件、过时时删除并同步索引。索引的钩子要一句话说清「这是什么、何时会用到」——这是下次启动时你第一时间看到的东西。");
 
 	// ---- 技能区（仅当有已加载技能时输出）----

@@ -75,7 +75,7 @@ export const api = {
   deleteScopeLabel: (botId: string, kind: string, scopeId: string) =>
     request<{ ok: true }>(`/api/memories/${botId}/scopes/${kind}/${scopeId}/label`, { method: "DELETE" }),
   listMemories: (botId: string, kind: string, scopeId: string) =>
-    request<{ sessionSummary: string | null; index: string | null; files: { name: string; size: number }[] }>(`/api/memories/${botId}/${kind}/${scopeId}`),
+    request<{ index: string | null; files: { name: string; size: number }[] }>(`/api/memories/${botId}/${kind}/${scopeId}`),
   readMemory: (botId: string, kind: string, scopeId: string, name: string) =>
     request<string>(`/api/memories/${botId}/${kind}/${scopeId}/${name}`),
   writeMemory: (botId: string, kind: string, scopeId: string, name: string, content: string) =>
@@ -86,10 +86,6 @@ export const api = {
     request<{ ok: true; note?: string }>(`/api/memories/${botId}/${kind}/${scopeId}/clear-memories`, { method: "POST" }),
   clearHistory: (botId: string, kind: string, scopeId: string) =>
     request<{ ok: true; note?: string }>(`/api/memories/${botId}/${kind}/${scopeId}/clear-history`, { method: "POST" }),
-  saveSummary: (botId: string, kind: string, scopeId: string, content: string) =>
-    request<{ ok: true }>(`/api/memories/${botId}/${kind}/${scopeId}/summary`, { method: "PUT", body: content, headers: { "Content-Type": "text/plain" } }),
-  clearSummary: (botId: string, kind: string, scopeId: string) =>
-    request<{ ok: true; note?: string }>(`/api/memories/${botId}/${kind}/${scopeId}/clear-summary`, { method: "POST" }),
 
   // messages
   listMessages: (params: Record<string, string | number | undefined>) => {

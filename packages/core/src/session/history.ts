@@ -8,7 +8,10 @@ const HISTORY_DIRNAME = "history";
 /**
  * 对话历史持久化：每个 scope 两层存储。
  *
- * 1. **session.jsonl**（当前会话快照）：回收时整体覆盖写。激活时全量加载。
+ * 1. **session.jsonl**（当前会话快照）：两条写盘路径——
+ *    - runPrompt 成功后增量 appendAll（防进程 crash 丢数据）；
+ *    - dispose 时全量 save 覆盖兜底（已包含此前 append 的消息）。
+ *    激活时全量 load。
  * 2. **history/YYYY-MM-DD.jsonl**（按天归档）：回收时把消息按 timestamp 归类到
  *    对应日期文件，**追加**写入（同一天的多次会话累积）。只读挂载到沙箱，
  *    agent 可用 read 工具查阅历史对话（如「上周聊了什么」）。
@@ -53,10 +56,32 @@ export class HistoryStore {
 	async save(messages: AgentMessage[]): Promise<void> {
 		try {
 			await mkdir(join(this.historyPath, ".."), { recursive: true });
-			const lines = messages.map((m) => JSON.stringify(m)).join("\n");
+			// 每行末尾带换行，确保后续 appendAll 追加的新行不会粘到最后一行上。
+			const lines = messages.map((m) => JSON.stringify(m)).join("\n") + (messages.length > 0 ? "\n" : "");
 			await writeFile(this.historyPath, lines, "utf8");
 		} catch {
 			// 持久化失败不阻断会话。
+		}
+	}
+
+	/**
+	 * 增量追加消息到 session.jsonl（每条一行，文件末尾追加）。
+	 *
+	 * 用途：runPrompt 成功后把本轮新增的消息立即落盘，避免进程被 kill 时
+	 * 未触发 dispose 的对话丢失。dispose 时 save() 仍会全量覆盖兜底
+	 * （全量快照已包含之前 append 的消息，不会丢数据）。
+	 *
+	 * 文件不存在时 appendFile 会自动创建；存在时追加。由于 save() 已保证
+	 * 文件以换行结尾，追加的新行不会粘到旧行上。
+	 */
+	async appendAll(messages: AgentMessage[]): Promise<void> {
+		if (messages.length === 0) return;
+		try {
+			await mkdir(join(this.historyPath, ".."), { recursive: true });
+			const lines = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
+			await appendFile(this.historyPath, lines, "utf8");
+		} catch {
+			// 增量落盘失败不阻断会话——dispose 时仍会全量 save 兜底。
 		}
 	}
 

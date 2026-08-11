@@ -24,7 +24,6 @@ export { loadSkillsFromDir, SANDBOX_SKILLS_DIR } from "./skills/skill-loader.ts"
 export { SessionManager } from "./session/session-manager.ts";
 export type { SessionManagerOptions, ActiveScopeInfo, ActiveScopeDetail } from "./session/session-manager.ts";
 export { HistoryStore } from "./session/history.ts";
-export { MemoryStore } from "./session/memory.ts";
 export { MemoryFiles } from "./session/memory-files.ts";
 export { createLogger, addSink, setLogLevel, createConsoleSink } from "./logging.ts";
 export type { Logger, LogEntry, LogSink, LogLevel } from "./logging.ts";

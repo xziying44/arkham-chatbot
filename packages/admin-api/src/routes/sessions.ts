@@ -47,10 +47,9 @@ export function createSessionsRoutes(deps: SessionRoutesDeps): Hono {
 	return app;
 }
 
-/** 读取某 scope 的历史 session.jsonl 与 memory.md（静态文件，路径由 server 提供辅助）。 */
-export async function readScopeHistory(scopeDir: string): Promise<{ session: unknown[]; memory: string | null }> {
+/** 读取某 scope 的历史 session.jsonl（静态文件，路径由 server 提供辅助）。 */
+export async function readScopeHistory(scopeDir: string): Promise<{ session: unknown[] }> {
 	let session: unknown[] = [];
-	let memory: string | null = null;
 	try {
 		const raw = await readFile(join(scopeDir, "session.jsonl"), "utf8");
 		session = raw
@@ -60,10 +59,5 @@ export async function readScopeHistory(scopeDir: string): Promise<{ session: unk
 	} catch {
 		/* 文件不存在 */
 	}
-	try {
-		memory = await readFile(join(scopeDir, "memory.md"), "utf8");
-	} catch {
-		/* 文件不存在 */
-	}
-	return { session, memory };
+	return { session };
 }

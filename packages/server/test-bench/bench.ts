@@ -191,7 +191,6 @@ const tools: AgentTool[] = [
 
 const systemPrompt = buildSystemPrompt({
   scopeName: "benchmark", scopeKind: "user",
-  recentMessageCount: 0,
   skillsBlock: formatSkillsForSystemPrompt(skills),
   tools,
 });

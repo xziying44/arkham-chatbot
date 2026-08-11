@@ -74,10 +74,10 @@ interface ActiveEntry {
 
 /**
  * 管理所有活跃 scope 的 ChatBotSession 实例，实现：
- * 1. **按需激活**：首次收到某 scope 消息时建 Agent（加载记忆+历史）。
+ * 1. **按需激活**：首次收到某 scope 消息时建 Agent（加载历史）。
  * 2. **串行处理**：同一 scope 的消息串行 prompt（pi Agent 不可重入）。
- * 3. **TTL 回收**：某 scope 超过 ttlMs 无新消息 → 提取记忆 + 落盘历史 + 销毁 Agent，仅保留磁盘数据。
- * 4. **断电续传**：磁盘上的 memory.md / session.jsonl 让下次激活恢复上下文。
+ * 3. **TTL 回收**：某 scope 超过 ttlMs 无新消息 → 落盘历史 + 销毁 Agent，仅保留磁盘数据。
+ * 4. **断电续传**：磁盘上的 session.jsonl 让下次激活恢复上下文（增量落盘 + dispose 全量兜底）。
  */
 export class SessionManager {
 	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage" | "onAttachment">> &
@@ -206,6 +206,7 @@ export class SessionManager {
 			scopeName: scope.id,
 			scopeDir,
 			model: this.opts.model,
+			models: this.opts.models,
 			streamFn: this.opts.streamFn,
 			env,
 			thinkingLevel: this.opts.thinkingLevel,

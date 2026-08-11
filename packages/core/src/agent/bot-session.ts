@@ -1,5 +1,5 @@
 import { type AgentMessage, type AgentTool, type Skill, formatSkillsForSystemPrompt, Agent, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model, Models } from "@earendil-works/pi-ai";
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
@@ -9,24 +9,25 @@ import { createSendMessageTool } from "../tools/send-message.ts";
 import { createLoadSkillTool } from "../tools/load-skill.ts";
 import type { PendingAskHolder } from "../tools/ask-user.ts";
 import { HistoryStore } from "../session/history.ts";
-import { MemoryStore } from "../session/memory.ts";
 import { MemoryFiles } from "../session/memory-files.ts";
 import type { ScopeKey } from "../identity/scope.ts";
 import { scopeKeyStr } from "../identity/scope.ts";
 
 /**
- * 一个活跃会话的协调器：持有 pi Agent，装配工具，管理记忆/历史存取。
+ * 一个活跃会话的协调器：持有 pi Agent，装配工具，管理历史存取。
  *
  * 生命周期由 {@link SessionManager} 驱动：
- * - 激活（activate）：读历史 + 记忆 → 建 Agent → 进入可对话状态。
+ * - 激活（activate）：读历史 → 建 Agent → 进入可对话状态。
  * - 对话（prompt）：把群成员消息喂给 Agent，收集流式输出拼成回复。
- * - 回收（dispose）：提取记忆摘要落盘 + 落盘历史 + 释放 Agent。
+ * - 回收（dispose）：落盘历史快照 + 释放 Agent（压缩在后续步骤接入）。
  */
 export interface BotSessionOptions {
 	readonly scope: ScopeKey;
 	readonly scopeName: string;
 	readonly scopeDir: string;
 	readonly model: Model<any>;
+	/** pi-ai 的 Models 注册表（会话压缩 compact() 用，替代 streamFn 之外的 LLM 调用）。 */
+	readonly models: Models;
 	readonly streamFn: StreamFn;
 	readonly env: ExecutionEnv;
 	/** 思考程度: off/low/medium/high/max。控制 Agent 的 thinkingLevel。 */
@@ -63,7 +64,6 @@ export class ChatBotSession {
 	readonly scope: ScopeKey;
 	private readonly opts: BotSessionOptions;
 	private readonly history: HistoryStore;
-	private readonly memory: MemoryStore;
 	/** 文件式自管理记忆（memories/ 目录 + MEMORY.md 索引）。 */
 	private readonly memoryFiles: MemoryFiles;
 	private agent!: Agent;
@@ -86,7 +86,6 @@ export class ChatBotSession {
 		this.opts = opts;
 		this.scope = opts.scope;
 		this.history = new HistoryStore(opts.scopeDir);
-		this.memory = new MemoryStore(opts.scopeDir);
 		this.memoryFiles = new MemoryFiles(opts.scopeDir);
 		// send_message 工具：agent 主动决定何时发消息（替代自动发送文字输出）。
 		const sendMessageTool = opts.onSendMessage
@@ -104,25 +103,19 @@ export class ChatBotSession {
 		this.tools = [...createDefaultTools(opts.env), ...sendMessageTool, ...loadSkillTool, ...(opts.extraTools ?? [])];
 	}
 
-	/** 激活：确保工作目录存在，读历史/记忆/记忆索引，构造 Agent。 */
+	/** 激活：确保工作目录存在，读历史，构造 Agent。 */
 	async activate(): Promise<void> {
 		await mkdir(join(this.opts.scopeDir, "workspace"), { recursive: true });
 		await this.memoryFiles.ensure();
 		// 检查「清除历史」标记：存在则本次不注入历史消息（session.jsonl 不删），然后消费标记。
 		const cleared = await this.consumeHistoryClearedFlag();
-		// 并行加载：历史（若被标记清除则注入空）、会话摘要、记忆索引。
-		const [previousMessages, sessionSummary, memoryIndex] = await Promise.all([
-			cleared ? Promise.resolve([]) : this.history.load(),
-			this.memory.load(),
-			this.memoryFiles.loadIndex(),
-		]);
+		// 加载历史（若被标记清除则注入空）。会话续接靠 session.jsonl 里的消息
+		// （Step 2 接入后，含 compactionSummary 消息——压缩摘要作为对话历史的一部分）。
+		const previousMessages = cleared ? [] : await this.history.load();
 		const systemPrompt = buildSystemPrompt({
 			scopeName: this.opts.scopeName,
 			scopeKind: this.opts.scope.kind,
 			persona: this.opts.persona,
-			memory: sessionSummary,
-			memoryIndex,
-			recentMessageCount: previousMessages.length,
 			skillsBlock: this.opts.skills?.length ? formatSkillsForSystemPrompt(this.opts.skills) : "",
 			tools: this.tools,
 		});
@@ -224,6 +217,9 @@ export class ChatBotSession {
 	private async runPrompt(formattedText: string): Promise<string> {
 		const hasSendTool = !!this.opts.onSendMessage;
 		this.messageSentThisRun = false;
+		// 记录 run 前的消息数，结束后把本轮新增的消息增量追加到 session.jsonl，
+		// 这样即使进程被 kill，未触发 dispose 的对话也不会丢（dispose 时 history.save 仍会全量覆盖兜底）。
+		const beforeLen = this.agent.state.messages.length;
 		const collector = new AssistantTextCollector(hasSendTool ? undefined : this.opts.onIntermediateText);
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
 		try {
@@ -235,6 +231,11 @@ export class ChatBotSession {
 		} finally {
 			unsubscribe();
 		}
+		// 增量落盘本轮新增消息（user + assistant + toolResult 等）。失败不阻断回复。
+		const after = this.agent.state.messages;
+		if (after.length > beforeLen) {
+			await this.history.appendAll(after.slice(beforeLen)).catch(() => {});
+		}
 		// 有 send_message 工具且 agent 已通过工具发送了消息 → 返回空（router 不重复发）。
 		// agent 没调 send_message（漏了）→ 用最终文字兜底。
 		if (hasSendTool && this.messageSentThisRun) return "";
@@ -242,59 +243,23 @@ export class ChatBotSession {
 	}
 
 	/**
-	 * 回收：让 agent 自己总结会话并写入 memory.md，落盘历史，然后释放 Agent。
+	 * 回收：落盘历史快照 + 按天归档，然后释放 Agent。
 	 *
-	 * 摘要由 agent 基于自己的完整上下文（系统提示词+记忆+对话历史）自行生成，
-	 * 而非外部 generateSummary——agent 最清楚哪些重要、该带什么到下次。
+	 * 当前实现为直接落盘原始消息（不做压缩）。Step 2 接入后会改为调 pi 的
+	 * compact() 把历史压缩成 [compactionSummary, ...retainedTail] 再落盘，
+	 * 让下次激活时 token 开销更小、会话无缝续接。
 	 *
-	 * 注意：总结这段对话（"请总结" + agent 回复）**不存入 session.jsonl**——
-	 * 在发总结消息前快照 messages，用快照落盘，避免下次加载时混入总结对话。
-	 * 总结只写 memory.md。
+	 * 注意：dispose 期间不再向 agent 发任何 prompt（旧版的 summarizeSelf 已删除），
+	 * 避免一次额外的 LLM 往返拖慢回收。
 	 */
 	async dispose(): Promise<void> {
 		try {
-			// 先快照当前 messages（不含即将发生的总结对话）。
 			const historySnapshot = this.agent.state.messages.slice();
-			// 让 agent 自己总结当前会话。它带着完整上下文，知道该保留什么。
-			const summary = await this.summarizeSelf();
-			if (summary) await this.memory.save(summary);
-			// 用快照落盘——不包含总结这段对话。
 			await this.history.save(historySnapshot);
-			// 按天归档到 history/YYYY-MM-DD.jsonl（长期累积，只读挂载到沙箱供 agent 查阅）。
 			await this.history.archiveByDay(historySnapshot);
 		} finally {
 			this.agent.abort();
 			await this.agent.waitForIdle().catch(() => {});
-		}
-	}
-
-	/**
-	 * 让 agent 自己总结会话，返回摘要文本。
-	 * 复用 prompt 机制（带 replyToHolder 清理），收集 assistant 回复。
-	 */
-	private async summarizeSelf(): Promise<string | undefined> {
-		const messages = this.agent.state.messages;
-		if (messages.length === 0) return undefined;
-		try {
-			const collector = new AssistantTextCollector();
-			const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
-			try {
-				await this.agent.prompt(
-					"【系统】这个会话即将被回收（1 小时无活动）。请基于以上全部对话，总结一段简洁的会话摘要写入你的长期记忆，供下次会话激活时续接上下文。\n\n" +
-						"要求：\n" +
-						"- 用 Markdown，控制在 500 字以内\n" +
-						"- 保留：关键事实、未完成的任务、重要的用户偏好/约定、你的人设演变\n" +
-						"- 不要逐条复述对话，只提炼对未来有用的信息\n" +
-						"- 如果对话没什么值得记住的，回复「（无重要内容）」\n\n" +
-						"直接输出摘要内容，不要调用工具。",
-				);
-			} finally {
-				unsubscribe();
-			}
-			const text = collector.text;
-			return text && !text.includes("（无重要内容）") ? text : undefined;
-		} catch {
-			return undefined;
 		}
 	}
 

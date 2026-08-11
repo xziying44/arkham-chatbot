@@ -11,7 +11,6 @@ interface ScopeRow {
 }
 
 interface MemData {
-  sessionSummary: string | null;
   index: string | null;
   files: { name: string; size: number }[];
 }
@@ -100,12 +99,7 @@ export default function Memories() {
   const saveFile = async () => {
     if (!botId || !selected || !viewing) return;
     try {
-      // 会话摘要走专门的 summary 接口；其它记忆文件走 writeMemory。
-      if (viewing.name.startsWith("memory.md")) {
-        await api.saveSummary(botId, selected.kind, selected.id, editContent);
-      } else {
-        await api.writeMemory(botId, selected.kind, selected.id, viewing.name, editContent);
-      }
+      await api.writeMemory(botId, selected.kind, selected.id, viewing.name, editContent);
       message.success("已保存");
       setViewing({ ...viewing, content: editContent, editing: false });
       loadMemories(selected);
@@ -231,21 +225,6 @@ export default function Memories() {
                 </Space>
               }
             >
-              {/* 会话摘要（memory.md，回收时自动生成）*/}
-              {memData?.sessionSummary != null && (
-                <div style={{ marginBottom: 12 }}>
-                  <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                    <Typography.Text type="secondary" strong>会话摘要（memory.md · 回收时自动生成）</Typography.Text>
-                    <Space size="small">
-                      <Button size="small" onClick={() => { setViewing({ name: "memory.md（会话摘要）", content: memData.sessionSummary ?? "", editing: false }); setEditContent(memData.sessionSummary ?? ""); }}>查看/编辑</Button>
-                      <Popconfirm title="删除会话摘要？" onConfirm={async () => { if (botId && selected) { await api.clearSummary(botId, selected.kind, selected.id); message.success("已删除摘要"); loadMemories(selected); } }} okText="删除" cancelText="取消">
-                        <Button size="small" danger>清除</Button>
-                      </Popconfirm>
-                    </Space>
-                  </Space>
-                  <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, background: "#fffbe6", padding: 8, borderRadius: 4, margin: "4px 0", maxHeight: 120, overflow: "auto" }}>{memData.sessionSummary}</pre>
-                </div>
-              )}
               {memData?.index && (
                 <div style={{ marginBottom: 12 }}>
                   <Typography.Text type="secondary" strong>MEMORY.md 索引（agent 自管理记忆）</Typography.Text>
