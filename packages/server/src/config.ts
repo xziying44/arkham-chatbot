@@ -1,4 +1,14 @@
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * 仓库根目录（锚定到 config.ts 所位置的上三级）。
+ *
+ * 用绝对路径而非 cwd 相对路径——进程可能从 packages/server/（pnpm start）
+ * 或仓库根（直接 node）启动，cwd 不稳定。锚定到源码位置保证 skills/ prompts/
+ * 总能找到。env（SKILLS_DIR / PROMPTS_DIR）覆盖时仍用 env 值。
+ */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 /**
  * 从环境变量解析出的应用配置。
@@ -90,11 +100,23 @@ function bool(name: string, fallback: boolean): boolean {
 	return v === "true" || v === "1";
 }
 
+/**
+ * 把路径解析为绝对路径：相对路径锚定到仓库根（而非 cwd）。
+ *
+ * 进程可能从 packages/server/（pnpm start）或仓库根启动，cwd 不稳定。
+ * 用户在 .env 里写 `./skills` 或 `./prompts` 时，期望是相对于仓库根，
+ * 所以这里统一用 REPO_ROOT 做基准。
+ */
+function resolvePath(p: string | undefined, fallback: string): string {
+	const raw = p ?? fallback;
+	return resolve(REPO_ROOT, raw);
+}
+
 /** 从 process.env 读取并校验配置。 */
 export function loadConfig(): AppConfig {
-	const dataDir = resolve(process.env.CHATBOT_DATA_DIR ?? "./data");
-	const skillsDir = resolve(process.env.SKILLS_DIR ?? "./skills");
-	const promptsDir = resolve(process.env.PROMPTS_DIR ?? "./prompts");
+	const dataDir = resolvePath(process.env.CHATBOT_DATA_DIR, "./data");
+	const skillsDir = resolvePath(process.env.SKILLS_DIR, "./skills");
+	const promptsDir = resolvePath(process.env.PROMPTS_DIR, "./prompts");
 	// arkham-workshop 相关路径：默认从 ARKHAM_WORKSHOP_DIR 推导，或单独指定。
 	const arkhamWorkshopDir = optional("ARKHAM_WORKSHOP_DIR");
 	return {
