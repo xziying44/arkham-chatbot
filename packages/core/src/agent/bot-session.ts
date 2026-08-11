@@ -517,16 +517,18 @@ export class ChatBotSession {
 /**
  * 收集 agent 的 assistant 文本，拼成最终回复；并在首个工具轮文字时给即时反馈。
  *
- * 设计（兼顾「即时反馈」与「不刷屏」）：
+ * 设计（兼顾「即时反馈」「不刷屏」「回复干净」）：
  * - **首条中间文字立即发**：agent 在第一个工具轮（stopReason=toolUse）输出的文字，
- *   通过 onFirstIntermediate 回调立即发给用户——这是用户收到指令后的即时反馈
- *   （agent 会写「收到，开始做XX，先画插画」之类的话）。只发**第一条**，保证不刷屏。
- * - **后续中间文字攒着**：第二个及以后的工具轮文字不再发送，攒到 finalParts，
- *   与最终轮文字一起作为最终回复（或被 agent 自己的 send_message 覆盖）。
+ *   通过 onFirstIntermediate 回调立即发给用户——即时反馈。只发第一条。
+ * - **后续中间文字丢弃**：第二个及以后的工具轮文字**直接扔掉**，不攒、不发。
+ *   这些是 agent 的思考碎屑（如「整理一下用户提供的信息」「让我看看现有示例」），
+ *   用户不需要看到，更不能拼进最终回复（否则回复会变成所有思考的拼接，又长又乱）。
+ * - **最终轮文字作为回复**：最后一轮（stopReason=stop/length）的文字进 finalParts，
+ *   作为 runPrompt 的返回值（最终回复）。如果 agent 调了 send_message，这条会被
+ *   router 跳过（messageSentThisRun=true → 返回空）。
  *
- * 为什么不全靠 agent 主动 send_message：实测 agent 经常把反馈写成普通文字而非
- * 调 send_message（提示词约束不可靠）。靠「首条中间文字自动发」兜底，保证用户
- * 总能拿到即时反馈。单次请求 ≤2 条消息（首条反馈 + 最终结果）。
+ * 结果：单次请求 ≤2 条消息——首条即时反馈（首工具轮）+ 最终结果（最终轮或 send_message）。
+ * 中间所有思考碎屑对用户不可见。
  *
  * 注意：pi 的事件流里，message_update 携带当前 partial；我们只在 message_end
  * （assistant 消息完成）时取该条消息的完整文本，避免拼接流式增量造成重复。
@@ -554,15 +556,16 @@ class AssistantTextCollector {
 			.trim();
 		if (!chunk) return;
 
-		// 工具轮（后面还有工具执行）的文字：
-		// - 第一条 → 立即发给用户（首条即时反馈），发完标记，不再发后续。
-		// - 后续 → 攒到 finalParts（避免一次制卡刷 4-8 条）。
-		if (message.stopReason === "toolUse" && this.onFirstIntermediate && !this.firstIntermediateSent) {
-			this.firstIntermediateSent = true;
-			this.onFirstIntermediate(chunk);
+		if (message.stopReason === "toolUse") {
+			// 工具轮文字：第一条发给用户（即时反馈），后续直接丢弃（不攒不发——
+			// 它们是思考碎屑，拼进回复会让回复变成所有思考的杂乱拼接）。
+			if (!this.firstIntermediateSent && this.onFirstIntermediate) {
+				this.firstIntermediateSent = true;
+				this.onFirstIntermediate(chunk);
+			}
 			return;
 		}
-		// 最终轮（stop/length）的文字，或后续工具轮的文字，都攒到 finalParts。
+		// 最终轮（stop/length）的文字 → 作为回复内容。
 		this.finalParts.push(chunk);
 	};
 
