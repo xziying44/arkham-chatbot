@@ -132,16 +132,12 @@ test("Anthropic 兼容端点转换完整上下文并返回思考和文本", asyn
 	assert.equal(originalCalls, 0);
 	assert.deepEqual(events.map((event) => event.type), [
 		"start",
-		"thinking_start",
-		"thinking_delta",
-		"thinking_end",
 		"text_start",
 		"text_delta",
 		"text_end",
 		"done",
 	]);
 	assert.deepEqual(result.content, [
-		{ type: "thinking", thinking: "已经得到结果。" },
 		{ type: "text", text: "今天是晴天。" },
 	]);
 	assert.equal(result.stopReason, "stop");
@@ -278,9 +274,6 @@ test("OpenAI 兼容端点转换完整上下文和响应事件", async (t) => {
 
 	assert.deepEqual(events.map((event) => event.type), [
 		"start",
-		"thinking_start",
-		"thinking_delta",
-		"thinking_end",
 		"text_start",
 		"text_delta",
 		"text_end",
@@ -290,7 +283,6 @@ test("OpenAI 兼容端点转换完整上下文和响应事件", async (t) => {
 		"done",
 	]);
 	assert.deepEqual(result.content, [
-		{ type: "thinking", thinking: "我需要继续查询。" },
 		{ type: "text", text: "正在继续查询。" },
 		{ type: "toolCall", id: "call-new", name: "lookup", arguments: { keyword: "温度" } },
 	]);

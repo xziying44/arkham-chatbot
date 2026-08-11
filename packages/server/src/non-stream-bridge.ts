@@ -204,11 +204,12 @@ function nonStreamOpenAI(
 			const now = Date.now();
 			const content: AssistantMessage["content"] = [];
 
-			// reasoning_content → thinking block
+			// reasoning_content：记录到日志（诊断用），但不放入 thinking block。
+			// 原因：thinking block 需要 signature 才能被 Anthropic 兼容端点（如 DeepSeek）
+			// 在多轮 tool_use 时正确接受；非流式桥接拿不到 signature，无 signature 的
+			// thinking block 会导致后续请求 400（tool_use without tool_result，实际是
+			// thinking 块打乱了消息序列校验）。reasoning 内容对 agent 逻辑无用，直接丢弃。
 			const reasoning = (msg as { reasoning_content?: string }).reasoning_content;
-			if (reasoning && reasoning.trim()) {
-				content.push({ type: "thinking", thinking: reasoning });
-			}
 
 			// content → text block
 			if (msg.content && msg.content.trim()) {
@@ -421,12 +422,12 @@ function nonStreamAnthropic(
 			const content: AssistantMessage["content"] = [];
 
 			// content blocks → pi-ai blocks
+			// 注意：thinking block 丢弃（同 OpenAI 分支的理由——无 signature 的 thinking
+			// block 会导致 DeepSeek 兼容端点多轮 tool_use 时 400）。reasoning 内容对 agent 逻辑无用。
 			let toolCount2 = 0;
 			if (Array.isArray(data.content)) {
 				for (const block of data.content) {
-					if (block.type === "thinking" && block.thinking) {
-						content.push({ type: "thinking", thinking: block.thinking });
-					} else if (block.type === "text" && block.text) {
+					if (block.type === "text" && block.text) {
 						content.push({ type: "text", text: block.text });
 					} else if (block.type === "tool_use") {
 						const toolCall: ToolCall = {
