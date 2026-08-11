@@ -138,6 +138,7 @@ export async function startApp(): Promise<AppRuntime> {
 		thinkingLevel: settings.thinkingLevel,
 		messages,
 		skillsDir: config.skillsDir,
+		promptsDir: config.promptsDir,
 		arkhamBinPath: config.arkhamBinPath,
 		arkhamAssetsDir: config.arkhamAssetsDir,
 		cardDatabaseDir: config.cardDatabaseDir,

@@ -1,0 +1,46 @@
+diff --git a/packages/server/src/app.ts b/packages/server/src/app.ts
+--- a/packages/server/src/app.ts
++++ b/packages/server/src/app.ts
+@@ ResolvedSettings @@
+-	/** 思考程度: off/low/medium/high/max。off=关闭思考，其余=开启并对应 effort。 */
+-	readonly thinkingLevel: string;
++	/** 群聊思考程度: off/low/medium/high/max。 */
++	readonly thinkingLevelGroup: string;
++	/** 私聊思考程度: off/low/medium/high/max。 */
++	readonly thinkingLevelUser: string;
+@@ resolveSettings @@
+-		thinkingLevel: s.getOr(SettingsKeys.thinkingLevel, config.thinkingLevel),
++		thinkingLevelGroup: s.getOr(SettingsKeys.thinkingLevelGroup, config.thinkingLevelGroup),
++		thinkingLevelUser: s.getOr(SettingsKeys.thinkingLevelUser, config.thinkingLevelUser),
+@@ startApp / BotManager 构造 @@
+-		thinkingLevel: settings.thinkingLevel,
++		thinkingLevelGroup: settings.thinkingLevelGroup,
++		thinkingLevelUser: settings.thinkingLevelUser,
+diff --git a/packages/server/src/bot-manager.ts b/packages/server/src/bot-manager.ts
+--- a/packages/server/src/bot-manager.ts
++++ b/packages/server/src/bot-manager.ts
+@@ BotManagerOptions @@
+-	/** 思考程度: off/low/medium/high/max。传给 Agent 控制思考开关与强度。 */
+-	readonly thinkingLevel?: string;
++	/** 群聊思考程度: off/low/medium/high/max。 */
++	readonly thinkingLevelGroup?: string;
++	/** 私聊思考程度: off/low/medium/high/max。 */
++	readonly thinkingLevelUser?: string;
+@@ SessionManager 构造 @@
+-			thinkingLevel: this.opts.thinkingLevel,
++			thinkingLevelGroup: this.opts.thinkingLevelGroup,
++			thinkingLevelUser: this.opts.thinkingLevelUser,
+diff --git a/packages/server/src/config.ts b/packages/server/src/config.ts
+--- a/packages/server/src/config.ts
++++ b/packages/server/src/config.ts
+@@ AppConfig @@
+-	/** 思考程度默认值: off/low/medium/high/max。管理端可改。 */
+-	readonly thinkingLevel: string;
++	/** 群聊思考程度默认值: off/low/medium/high/max。 */
++	readonly thinkingLevelGroup: string;
++	/** 私聊思考程度默认值: off/low/medium/high/max。 */
++	readonly thinkingLevelUser: string;
+@@ loadConfig @@
+-		thinkingLevel: optional("CHATBOT_THINKING_LEVEL") ?? "low",
++		thinkingLevelGroup: optional("CHATBOT_THINKING_LEVEL_GROUP") ?? "low",
++		thinkingLevelUser: optional("CHATBOT_THINKING_LEVEL_USER") ?? "high",

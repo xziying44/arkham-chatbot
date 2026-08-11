@@ -4,6 +4,8 @@ export type { IncomingMessage, OutgoingMessage } from "./session/message.ts";
 export { ChatBotSession } from "./agent/bot-session.ts";
 export type { BotSessionOptions } from "./agent/bot-session.ts";
 export { buildSystemPrompt } from "./agent/system-prompt.ts";
+export { PromptLoader } from "./prompts/prompt-loader.ts";
+export type { BuildSystemPromptOptions as PromptBuildOptions } from "./prompts/prompt-loader.ts";
 export { createDefaultTools, wrapHarnessTool, wrapHarnessTools } from "./tools/index.ts";
 export { createSendImageTool } from "./tools/send-image.ts";
 export type { CreateSendImageToolOptions, ImageSender, SendImageInput } from "./tools/send-image.ts";

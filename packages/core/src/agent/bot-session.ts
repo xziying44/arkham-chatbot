@@ -26,6 +26,7 @@ import { createLoadSkillTool } from "../tools/load-skill.ts";
 import type { PendingAskHolder } from "../tools/ask-user.ts";
 import { HistoryStore } from "../session/history.ts";
 import { MemoryFiles } from "../session/memory-files.ts";
+import type { PromptLoader } from "../prompts/prompt-loader.ts";
 import type { ScopeKey } from "../identity/scope.ts";
 import { scopeKeyStr } from "../identity/scope.ts";
 
@@ -107,6 +108,11 @@ export interface BotSessionOptions {
 	/** 已加载的技能清单（filePath 已重写为沙箱内路径）。所有 scope 共享。 */
 	readonly skills?: Skill[];
 	/**
+	 * 提示词加载器（所有 scope 共享同一实例）。启动时已 load() 过 prompts/static/*.md。
+	 * 热更新后同一实例会被 reload()，活跃会话重新激活即用新提示词。
+	 */
+	readonly promptLoader: PromptLoader;
+	/**
 	 * 共享的"当前被动消息 id"容器：prompt 时写入，工具执行期间读取。
 	 * 由 SessionManager 创建，与 extraToolsFactory 共享同一引用。
 	 */
@@ -181,12 +187,11 @@ export class ChatBotSession {
 		// 加载历史（若被标记清除则注入空）。会话续接靠 session.jsonl 里的消息
 		// （Step 2 接入后，含 compactionSummary 消息——压缩摘要作为对话历史的一部分）。
 		const previousMessages = cleared ? [] : await this.history.load();
-		const systemPrompt = buildSystemPrompt({
+		const systemPrompt = buildSystemPrompt(this.opts.promptLoader, {
 			scopeName: this.opts.scopeName,
 			scopeKind: this.opts.scope.kind,
 			persona: this.opts.persona,
 			skillsBlock: this.opts.skills?.length ? formatSkillsForSystemPrompt(this.opts.skills) : "",
-			tools: this.tools,
 		});
 		this.systemPromptCache = systemPrompt;
 

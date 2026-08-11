@@ -18,6 +18,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import * as builtinProviders from "@earendil-works/pi-ai/providers/all";
 import { createRestrictedBashTool } from "../../../packages/core/src/tools/restricted-bash.ts";
 import { buildSystemPrompt } from "../../../packages/core/src/agent/system-prompt.ts";
+import { PromptLoader } from "../../../packages/core/src/prompts/prompt-loader.ts";
 import { loadSkillsFromDir } from "../../../packages/core/src/skills/skill-loader.ts";
 import { mkdtemp, rm, mkdir, symlink, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -189,10 +190,13 @@ const tools: AgentTool[] = [
   createLoadSkillToolLocal(skills),
 ];
 
-const systemPrompt = buildSystemPrompt({
+// 提示词加载器（读 prompts/static/*.md）。bench 复用项目根的 prompts/。
+const promptLoader = new PromptLoader(resolve("prompts"));
+await promptLoader.load();
+
+const systemPrompt = buildSystemPrompt(promptLoader, {
   scopeName: "benchmark", scopeKind: "user",
   skillsBlock: formatSkillsForSystemPrompt(skills),
-  tools,
 });
 
 const { models, model } = buildModel();

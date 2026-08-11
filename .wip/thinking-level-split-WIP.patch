@@ -1,0 +1,52 @@
+diff --git a/packages/admin-api/src/routes/settings.ts b/packages/admin-api/src/routes/settings.ts
+index 0f54e4b..89c2df1 100644
+--- a/packages/admin-api/src/routes/settings.ts
++++ b/packages/admin-api/src/routes/settings.ts
+@@ -16,7 +16,8 @@ const EDITABLE = [
+ 	SettingsKeys.llmModel,
+ 	SettingsKeys.llmAnthropicBaseUrl,
+ 	SettingsKeys.llmOpenaiBaseUrl,
+-	SettingsKeys.thinkingLevel,
++	SettingsKeys.thinkingLevelGroup,
++	SettingsKeys.thinkingLevelUser,
+ 	SettingsKeys.sessionTtlMs,
+ 	SettingsKeys.sandboxEnabled,
+ 	SettingsKeys.sandboxNetworkDisabled,
+diff --git a/packages/server/src/bootstrap.ts b/packages/server/src/bootstrap.ts
+index cc1f80e..07e83d9 100644
+--- a/packages/server/src/bootstrap.ts
++++ b/packages/server/src/bootstrap.ts
+@@ -31,7 +31,8 @@ export function bootstrapIfEmpty(db: DatabaseSync, config: AppConfig): void {
+ 	// LLM / 会话 / 沙箱默认值：始终写一次（已存在的不覆盖，保留用户在管理端的改动）。
+ 	const defaults = {
+ 		[SettingsKeys.llmModel]: config.model,
+-		[SettingsKeys.thinkingLevel]: config.thinkingLevel,
++		[SettingsKeys.thinkingLevelGroup]: config.thinkingLevelGroup,
++		[SettingsKeys.thinkingLevelUser]: config.thinkingLevelUser,
+ 		[SettingsKeys.sessionTtlMs]: String(config.session.ttlMs),
+ 		[SettingsKeys.sandboxEnabled]: String(config.sandbox.enabled),
+ 		[SettingsKeys.sandboxNetworkDisabled]: String(config.sandbox.networkDisabled),
+diff --git a/packages/store/src/settings.ts b/packages/store/src/settings.ts
+index fa9a55e..fb0a680 100644
+--- a/packages/store/src/settings.ts
++++ b/packages/store/src/settings.ts
+@@ -7,7 +7,8 @@ import type { DatabaseSync } from "./db.ts";
+  *   llm_model                       — "<provider>/<model-id>"
+  *   llm_anthropic_base_url          — 自定义 Anthropic 兼容端点（可选）
+  *   llm_openai_base_url             — 自定义 OpenAI Chat Completions 兼容端点（可选）
+- *   thinking_level                  — 思考程度: off/low/medium/high/max
++ *   thinking_level_group             — 群聊思考程度: off/low/medium/high/max
++ *   thinking_level_user              — 私聊思考程度: off/low/medium/high/max
+  *   session_ttl_ms                  — 会话回收阈值（毫秒）
+  *   sandbox_enabled                 — "true"|"false"
+  *   sandbox_network_disabled        — "true"|"false"
+@@ -20,7 +21,8 @@ export const SettingsKeys = {
+ 	llmModel: "llm_model",
+ 	llmAnthropicBaseUrl: "llm_anthropic_base_url",
+ 	llmOpenaiBaseUrl: "llm_openai_base_url",
+-	thinkingLevel: "thinking_level",
++	thinkingLevelGroup: "thinking_level_group",
++	thinkingLevelUser: "thinking_level_user",
+ 	sessionTtlMs: "session_ttl_ms",
+ 	sandboxEnabled: "sandbox_enabled",
+ 	sandboxNetworkDisabled: "sandbox_network_disabled",

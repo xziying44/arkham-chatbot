@@ -29,6 +29,11 @@ export interface AppConfig {
 	readonly dataDir: string;
 	/** 技能源文件目录（SKILL.md 所在目录），启动时加载注入所有会话。 */
 	readonly skillsDir: string;
+	/**
+	 * 提示词源文件目录（prompts/static/*.md 所在目录）。
+	 * 启动时加载注入所有会话；fs.watch 监听，改文件后热更新（活跃会话重新激活即生效）。
+	 */
+	readonly promptsDir: string;
 	/** arkham-workshop CLI 二进制路径（DIY卡图技能用）。可选。 */
 	readonly arkhamBinPath?: string;
 	/** arkham-workshop 资产目录（字体/图片/cardback）。可选。 */
@@ -89,10 +94,12 @@ function bool(name: string, fallback: boolean): boolean {
 export function loadConfig(): AppConfig {
 	const dataDir = resolve(process.env.CHATBOT_DATA_DIR ?? "./data");
 	const skillsDir = resolve(process.env.SKILLS_DIR ?? "./skills");
+	const promptsDir = resolve(process.env.PROMPTS_DIR ?? "./prompts");
 	// arkham-workshop 相关路径：默认从 ARKHAM_WORKSHOP_DIR 推导，或单独指定。
 	const arkhamWorkshopDir = optional("ARKHAM_WORKSHOP_DIR");
 	return {
 		skillsDir,
+		promptsDir,
 		arkhamBinPath: optional("ARKHAM_CLI_PATH")
 			?? (arkhamWorkshopDir ? resolve(arkhamWorkshopDir, "target/release/arkham-cli") : undefined),
 		arkhamAssetsDir: optional("ARKHAM_ASSETS_DIR")

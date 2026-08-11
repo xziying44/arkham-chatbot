@@ -4,6 +4,7 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import { ChatBotSession } from "../agent/bot-session.ts";
 import type { PendingAskHolder } from "../tools/ask-user.ts";
+import type { PromptLoader } from "../prompts/prompt-loader.ts";
 import type { ScopeKey } from "../identity/scope.ts";
 import { scopeKeyStr } from "../identity/scope.ts";
 import type { IncomingMessage, OutgoingMessage } from "./message.ts";
@@ -32,6 +33,8 @@ export interface SessionManagerOptions {
 	readonly persona?: string;
 	/** 已加载的技能清单（所有 scope 共享，filePath 已重写为沙箱内路径）。 */
 	readonly skills?: Skill[];
+	/** 提示词加载器（所有 scope 共享）。启动时已 load() 过 prompts/static/*.md。 */
+	readonly promptLoader: PromptLoader;
 	/**
 	 * 按 scope 生成额外工具（如 send_image、ask_user）。每个 scope 激活时调用一次，
 	 * 返回的工具会与默认 bash/read/edit/write 一起装入 Agent。
@@ -76,7 +79,7 @@ interface ActiveEntry {
  */
 export class SessionManager {
 	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment">> &
-		Pick<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment">;
+		Pick<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "promptLoader" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment">;
 	private readonly active = new Map<string, ActiveEntry>();
 	private reaperTimer: ReturnType<typeof setInterval> | undefined;
 	private shuttingDown = false;
@@ -94,6 +97,7 @@ export class SessionManager {
 			thinkingLevel: opts.thinkingLevel,
 			persona: opts.persona,
 			skills: opts.skills,
+			promptLoader: opts.promptLoader,
 			extraToolsFactory: opts.extraToolsFactory,
 			onSendMessage: opts.onSendMessage,
 			onAttachment: opts.onAttachment,
@@ -104,6 +108,16 @@ export class SessionManager {
 	start(): void {
 		if (this.reaperTimer) return;
 		this.reaperTimer = setInterval(() => void this.reap(), this.opts.reaperIntervalMs);
+	}
+
+	/**
+	 * 热更新技能清单：替换 opts.skills（影响新激活的会话）。
+	 *
+	 * 已激活的会话不会立即用新技能（Agent 已构建、systemPrompt 已烘焙）。
+	 * 调用方（BotManager.reloadSkills）应在调此方法后 reapAll，让活跃会话下次消息重新激活。
+	 */
+	updateSkills(skills: Skill[]): void {
+		(this.opts as { skills?: Skill[] }).skills = skills;
 	}
 
 	/**
@@ -206,6 +220,7 @@ export class SessionManager {
 			thinkingLevel: this.opts.thinkingLevel,
 			persona: this.opts.persona,
 			skills: this.opts.skills,
+			promptLoader: this.opts.promptLoader,
 			extraTools,
 			replyToHolder,
 			pendingAskHolder,

@@ -1,4 +1,5 @@
 import { mkdir, rm, writeFile, readdir } from "node:fs/promises";
+import { watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { StreamFn, Skill, AgentTool } from "@earendil-works/pi-agent-core";
@@ -11,6 +12,7 @@ import {
 	createLogger,
 	loadCardIndex,
 	loadSkillsFromDir,
+	PromptLoader,
 	type Logger,
 	type ScopeKey,
 	type IncomingMessage,
@@ -46,6 +48,8 @@ export interface BotManagerOptions {
 	readonly messages?: MessageRepository;
 	/** 技能源文件目录（宿主机绝对路径）。启动时加载，注入所有会话。 */
 	readonly skillsDir: string;
+	/** 提示词源文件目录（宿主机绝对路径，prompts/static/*.md）。启动时加载，fs.watch 热更新。 */
+	readonly promptsDir: string;
 	/** arkham-cli 二进制路径（宿主机）。技能 diy-card 用它渲染卡图。可选。 */
 	readonly arkhamBinPath?: string;
 	/** arkham-cli 资产目录（宿主机绝对路径）。可选。 */
@@ -97,17 +101,29 @@ export class BotManager {
 	private skills: Skill[] = [];
 	/** 启动时从 cardDatabaseDir 加载的卡牌索引（所有会话共享，供 search_cards）。 */
 	private cardIndex: IndexedCard[] = [];
+	/** 提示词加载器（所有会话共享）。读 prompts/static/*.md，fs.watch 触发 reload。 */
+	private readonly promptLoader: PromptLoader;
+	/** skills/ + prompts/ 目录的文件监听器（热更新）。 */
+	private watchers: FSWatcher[] = [];
 
 	constructor(opts: BotManagerOptions) {
 		this.opts = opts;
 		this.log = opts.logger ?? createLogger("bot-manager");
+		this.promptLoader = new PromptLoader(opts.promptsDir);
 	}
 
-	/** 启动：加载技能 → 为每个 enabled 的配置构建并连接实例。失败的机器人记日志、跳过，不阻塞其它。 */
+	/** 启动：加载提示词 → 加载技能 → 为每个 enabled 的配置构建并连接实例。失败的机器人记日志、跳过，不阻塞其它。 */
 	async start(configs: BotConfig[]): Promise<void> {
 		// 可选：启动时清除所有 scope 的对话历史（改配置后避免旧上下文污染）。
 		if (this.opts.clearHistoryOnStart) {
 			await this.markAllHistoryCleared(configs);
+		}
+		// 加载提示词文件（prompts/static/*.md）。所有会话共享同一 PromptLoader 实例。
+		try {
+			await this.promptLoader.load();
+			this.log.info("提示词已加载", { dir: this.opts.promptsDir });
+		} catch (error) {
+			this.log.warn("提示词目录加载失败，部分提示词会缺失", { dir: this.opts.promptsDir, error: (error as Error).message });
 		}
 		// 加载技能（所有会话共享）。目录不存在或无技能文件不报错，只是没有技能可用。
 		try {
@@ -145,6 +161,8 @@ export class BotManager {
 				this.log.error("机器人启动失败", { botId: cfg.id, name: cfg.name, error: (error as Error).message });
 			}
 		}
+		// 启动文件监听：skills/ 或 prompts/ 改动 → 重载 + reap 所有活跃会话。
+		this.startWatchers();
 	}
 
 	/**
@@ -279,6 +297,8 @@ export class BotManager {
 
 	/** 关闭所有机器人（回收会话 + 断开连接）。 */
 	async shutdown(): Promise<void> {
+		for (const w of this.watchers) w.close();
+		this.watchers = [];
 		const all = Array.from(this.instances.values());
 		await Promise.all(all.map((inst) => this.teardown(inst).catch(() => {})));
 		this.log.info("所有机器人已关闭", { count: all.length });
@@ -293,7 +313,79 @@ export class BotManager {
 		return total;
 	}
 
+	/**
+	 * 热更新技能：重新读 skillsDir → 更新 this.skills + 同步到所有 SessionManager →
+	 * reap 所有活跃会话。下条消息到达时重新激活，用新技能构建 systemPrompt。
+	 *
+	 * 由 fs.watch 自动触发，也可由管理端手动调（POST /admin/skills/reload）。
+	 */
+	async reloadSkills(): Promise<void> {
+		try {
+			const { skills, diagnostics } = await loadSkillsFromDir(this.opts.skillsDir);
+			this.skills = skills;
+			for (const inst of this.instances.values()) {
+				inst.sessions.updateSkills(skills);
+			}
+			for (const d of diagnostics) {
+				this.log.warn("技能加载警告", { code: d.code, path: d.path, message: d.message });
+			}
+			await this.reapAllSessions();
+			this.log.info("技能已热更新并重新激活会话", { count: skills.length });
+		} catch (error) {
+			this.log.warn("技能热更新失败", { error: (error as Error).message });
+		}
+	}
+
+	/**
+	 * 热更新提示词：重新读 prompts/static/*.md → reap 所有活跃会话。
+	 * 下条消息到达时重新激活，用新提示词构建 systemPrompt。
+	 *
+	 * 由 fs.watch 自动触发，也可由管理端手动调。
+	 */
+	async reloadPrompts(): Promise<void> {
+		try {
+			await this.promptLoader.reload();
+			await this.reapAllSessions();
+			this.log.info("提示词已热更新并重新激活会话");
+		} catch (error) {
+			this.log.warn("提示词热更新失败", { error: (error as Error).message });
+		}
+	}
+
 	// ---- 内部 ----
+
+	/**
+	 * 监听 skills/ 和 prompts/ 目录，文件变化时 debounce 500ms 后重载 + reap。
+	 *
+	 * debounce 防止编辑器「保存触发多次事件」「先空后写」等抖动导致连续重载。
+	 * 单目录监听 recursive（macOS/Win 支持，Linux 仅 npm chokidar——这里用原生，
+	 * Linux 下子目录变化不触发，但 SKILL.md/prompt .md 改动通常在顶层，够用）。
+	 */
+	private startWatchers(): void {
+		const debounceReload = (kind: "skills" | "prompts") => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			return () => {
+				if (timer) clearTimeout(timer);
+				timer = setTimeout(() => {
+					this.log.info("检测到文件变化，触发热更新", { kind });
+					if (kind === "skills") void this.reloadSkills();
+					else void this.reloadPrompts();
+				}, 500);
+			};
+		};
+		try {
+			const skillWatcher = watch(this.opts.skillsDir, { recursive: true }, debounceReload("skills"));
+			this.watchers.push(skillWatcher);
+		} catch (e) {
+			this.log.warn("技能目录监听失败，技能改动需手动重启或管理端触发", { dir: this.opts.skillsDir, error: (e as Error).message });
+		}
+		try {
+			const promptsWatcher = watch(this.opts.promptsDir, { recursive: true }, debounceReload("prompts"));
+			this.watchers.push(promptsWatcher);
+		} catch (e) {
+			this.log.warn("提示词目录监听失败，提示词改动需手动重启或管理端触发", { dir: this.opts.promptsDir, error: (e as Error).message });
+		}
+	}
 
 	private botDataDir(botId: string): string {
 		return join(this.opts.dataRoot, botId);
@@ -344,6 +436,7 @@ export class BotManager {
 			thinkingLevel: this.opts.thinkingLevel,
 			persona: config.persona ?? undefined,
 			skills: this.skills,
+			promptLoader: this.promptLoader,
 			extraToolsFactory: (scope, getReplyToMsgId, workspaceDir, pendingAskHolder) => {
 				// send_image 的路径映射：cards-db（沙箱内挂载点）→ 宿主真实数据库目录。
 				// 生产 bwrap 下 cards-db 只是容器内挂载点，宿主进程看不到该路径，必须映射回
