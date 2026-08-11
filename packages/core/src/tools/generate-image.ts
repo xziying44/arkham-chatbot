@@ -111,7 +111,7 @@ const generateImageSchema = Type.Object({
 	),
 	n: Type.Optional(
 		Type.Number({
-			description: "生成张数 1-4，默认 2（生图方案建议默认出 2 张人工挑选，比反复调词成本低）。",
+			description: "生成张数 1-4，默认 1。用户对插画不满意时可以设 2 生成备选。",
 			minimum: 1,
 			maximum: 4,
 		}),
@@ -171,7 +171,7 @@ export function createGenerateImageTool(
 					details: undefined,
 				};
 			}
-			const n = Math.min(Math.max(Math.floor(params.n ?? 2), 1), 4);
+			const n = Math.min(Math.max(Math.floor(params.n ?? 1), 1), 4);
 			const prompt = buildArtPrompt(type, params.description);
 
 			let response: MinimaxImageResponse;
