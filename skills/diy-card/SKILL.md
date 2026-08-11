@@ -54,9 +54,13 @@ skills/       ← 技能源文件（只读）
 
 **不要在第一轮调 bash/read 探索目录**——你知道布局（见上）。
 
-### Step 2：渲染卡图（用 render_card 工具，传 JSON 内容）
+### Step 2：渲染卡图（用 render_card 工具，传 JSON + 插画路径）
 
-用 `render_card` 工具，把 .card 的 JSON 内容作为 `cardJson` 参数传入。工具内部自动写文件 + 渲染，返回图片路径（如 `cards/out/000.png`）。**不需要先 write 再 bash render——一步到位。**
+用 `render_card` 工具，传入：
+- `cardJson`：.card 的完整 JSON 字符串（不要写 picture_path，工具会自动嵌插画）
+- `picturePath`：插画路径（如 `generated/art-xxx-1.jpg`），工具读取后转 base64 嵌入 JSON。升级卡省略。
+
+工具内部自动：读插画→base64 嵌入→写文件→渲染→返回图片路径。**不需要先 write 再 bash render——一步到位。**
 
 **数值/正文处理原则**：
 - 用户给的数值 → **原样写入** JSON
@@ -65,22 +69,17 @@ skills/       ← 技能源文件（只读）
 - 走了 arkham-card-numbers 的 → 写配平后的数值；跑 balance_check，error 清零
 - **A 流程（用户给全的）不要跑 balance_check**
 
-**picture_path**（必须填，除非升级卡）：
-- 用户发图 → `"picture_path": "inbox/xxx.jpg"`（**不加 @ 前缀**）
-- 自动画的 → `"picture_path": "generated/art-xxx-1.jpg"`（用第 1 张）
-- 升级卡 → 不填
-
 查字段模板用 `read skills/diy-card/references/card-types.md`。
 
 ### Step 3：发图 + 交付
 
-`send_image(cards/out/000.png)` 发卡图，然后 `send_message` 附一句：
+`send_image`（路径用 render_card 返回的）发卡图，然后 `send_message` 附一句：
 ```
 出了，要改哪里告诉我（数值/正文/插画都可以调）。
 需要我把可编辑的 .card 源文件也发给你吗？要用编辑器自己改的话说一声。
 ```
 
-用户要 .card → 调 `send_card(cards/in/000.card)`。
+用户要 .card 源文件 → 调 `send_card(cardJson=...)`，把 .card JSON 直接传入（工具自动写文件并发送，不用先 write）。
 
 ---
 

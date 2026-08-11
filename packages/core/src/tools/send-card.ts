@@ -1,7 +1,7 @@
 import { type Static, Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { realpath, stat } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { resolve, join, sep } from "node:path";
 
 /**
  * 发 .card 卡牌源文件能力：由上层（server）注入具体实现，避免 core 依赖具体 IM。
@@ -11,7 +11,8 @@ import { resolve, sep } from "node:path";
 export type CardSender = (scopeId: string, filePath: string, replyToMsgId?: string) => Promise<void>;
 
 const sendCardSchema = Type.Object({
-	filePath: Type.String({ description: "宿主机本地 .card 卡牌源文件路径（工作目录内，如 cards/in/000.card）" }),
+	filePath: Type.Optional(Type.String({ description: "已有的 .card 文件路径（工作目录内，如 cards/in/000.card）。与 cardJson 二选一。" })),
+	cardJson: Type.Optional(Type.String({ description: ".card 的 JSON 内容字符串。传入后工具自动写文件到 cards/in/ 再发送（不用先 write）。与 filePath 二选一。" })),
 });
 
 export type SendCardInput = Static<typeof sendCardSchema>;
@@ -40,10 +41,36 @@ export function createSendCardTool(opts: CreateSendCardToolOptions): AgentTool<t
 		name: "send_card",
 		label: "send_card",
 		description:
-			"把当前工作目录（沙箱）里的一个 .card 卡牌源文件发送给本会话用户。filePath 必须是 .card 文件（工作目录内，如 cards/in/000.card）。用户拿到后可在卡牌编辑器里编辑。当用户想要 .card 源文件自己改时调用。文件只会发给当前会话的用户。",
+			"把 .card 卡牌源文件发送给用户编辑。两种方式：① 传 cardJson（JSON 内容字符串），工具自动写文件再发；② 传 filePath（已有文件路径）。用户拿到后可在编辑器里改。当用户想要 .card 源文件时调用。",
 		parameters: sendCardSchema,
 		async execute(_toolCallId, params, _signal, _onUpdate) {
-			const { filePath } = params;
+			const { filePath, cardJson } = params;
+
+			// cardJson 模式：工具内部写文件再发（agent 不用先 write）。
+			if (cardJson !== undefined) {
+				if (opts.workspaceDir) {
+					const inDir = join(opts.workspaceDir, "cards", "in");
+					const writePath = join(inDir, "000.card");
+					try {
+						const { mkdir: mkd, writeFile: wf } = await import("node:fs/promises");
+						await mkd(inDir, { recursive: true });
+						// 校验是合法 JSON
+						let parsed: unknown;
+						try { parsed = JSON.parse(cardJson); } catch { return { content: [{ type: "text", text: "错误：cardJson 不是有效的 JSON" }], details: undefined }; }
+						await wf(writePath, JSON.stringify(parsed, null, 2), "utf8");
+						await opts.send(opts.scopeId, writePath, opts.getReplyToMsgId?.());
+						return { content: [{ type: "text", text: `已写入并发送 .card 源文件：${writePath}` }], details: undefined };
+					} catch (error) {
+						return { content: [{ type: "text", text: `发送失败：${(error as Error).message}` }], details: undefined };
+					}
+				}
+				return { content: [{ type: "text", text: "错误：cardJson 模式需要 workspaceDir" }], details: undefined };
+			}
+
+			// filePath 模式：发已有文件（原逻辑）。
+			if (!filePath) {
+				return { content: [{ type: "text", text: "错误：必须提供 filePath 或 cardJson" }], details: undefined };
+			}
 			// 扩展名校验：只允许 .card（防止发任意文件）。
 			if (!filePath.endsWith(".card")) {
 				return {
