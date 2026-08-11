@@ -13,135 +13,120 @@ description: >
 
 > **🚨 铁律（最高优先级）**
 > 1. **渲染出的卡图必须带插画**。除非用户自己发了图，否则渲染前必须先调 generate_image 画插画并写进 .card 的 `picture_path`（唯一例外：升级卡用固定模板卡框）。没有 `picture_path` 就直接渲染 = 事故。
-> 2. **直接出图，不要问「是否确认生成」**。把卡做出来发出去，用结果说话——用户看到卡图后自然知道要改哪里。先发预览等确认只会白等一轮、拖慢体验。
-> 3. **用户给的东西能用就用，绝不替用户操心**。数值/正文是用户给的 → 原样写进 .card，不校验、不改写、不加「帮你优化了一下」。只有用户明确说「帮我配平/校准/设计」时才动。
+> 2. **直接出图，不要问「是否确认生成」**。把卡做出来发出去，用结果说话。
+> 3. **用户给的东西能用就用，绝不替用户操心**。数值/正文是用户给的 → 原样写进 .card，不校验、不改写。
+> 4. **不要用 bash 探索工作目录结构**。下面的「工作目录布局」已经告诉你了，直接用。
 
-## 加载规则（系统提示词的 skills-routing 已说明，这里只强调本技能视角）
-
-本技能**总是需要加载**（你要它的字段模板写 .card）。辅助技能（arkham-card-numbers / card-text-lint）**由你判断是否额外加载**：
-
-- **用户输入完整**（数值+正文都给齐，正文用了规范术语）→ **只加载 diy-card**，绝不加载 numbers，绝不加载 lint。
-- **正文是大白话**（「扣血」「装上去后」「用3次坏了」）→ 额外加载 `card-text-lint` 翻译。
-- **要设计数值**（没给数值 / 问「合理吗」/「帮我配平」）→ 额外加载 `arkham-card-numbers` 配平。
-- 不确定 → 先 `send_message` 问用户意图，**不要猜着加载**。
-
----
-
-## 模式 A：生成卡图（流程已简化——直接出图，不问确认）
-
-### Step 0：首条反馈
-
-收到制卡请求，**第一件事**调 `send_message` 告诉用户你在做什么，如「收到，开始做这张守护者支援卡，先画插画」。之后默默执行，最后出图。
-
-### Step 1：一轮并行——加载技能 + 画插画 + （按需）加载辅助技能
-
-**已知的独立工作一轮并行启动**（你的工具调用是并行执行的，串行调只会白等）：
+## 工作目录布局（不用 ls 探索，直接用）
 
 ```
-并行：
-├─ load_skill("diy-card", { references: ["references/card-types.md"] })  ← 拿字段模板
-├─ 判断要不要画插画：
-│    ├─ 用户发过图 → 跳过（用 inbox/ 里的图）
-│    ├─ 是升级卡 → 跳过（用固定模板卡框）
-│    └─ 其它 → generate_image（基于卡名/特性/效果写画面描述，type 按下表）
-├─ 正文是大白话？→ 并行 load_skill("card-text-lint")
-└─ 要设计数值？→ 并行 load_skill("arkham-card-numbers", {references: 按类型})
+cards/in/     ← 你写的 .card 文件放这里（文件名 000.card, 001.card...）
+cards/out/    ← 渲染产物（.png），arkham-cli 自动生成
+generated/    ← generate_image 画的插画（art-xxx-1.jpg）
+inbox/        ← 用户发来的图片
+.arkham/bin/arkham-cli  ← 渲染工具
+.arkham/assets/         ← 渲染资源
+skills/       ← 技能源文件（只读）
 ```
 
-**卡牌类型 → generate_image 的 type 映射**（画插画用）：
+## 渲染命令（固定，照抄即可）
 
-| 卡牌类型 | type |
-|---|---|
-| 调查员 / 盟友（盟友类支援卡） | `character` |
-| 敌人 | `monster` |
-| 地点 / 场景 / 事件 / 诡计 / 密谋 | `scene` |
-| 支援（道具/武器/法术等物品） / 技能 | `item` |
-
-generate_image 调用要点：
-- 根据**卡牌信息**（名称/特性/正文效果）写 description，公式：`[主体+外观]+[动作/状态]+[环境]+[唯一光源]+[情绪]`。必须指定唯一光源（提灯/月光/窗口）；只写画面主体，风格词不用写（工具模板已带）。
-- `n` 用默认值 2，**先不要发原图给用户**——直接用第 1 张（`generated/art-xxx-1.jpg`）当插画；另一张备用。
-- **绝对不要 read 生成的图片去「看哪张好」**——模型不支持图片输入，read 图片后后续对话会空回复卡死。盲选第 1 张。
-- 返回路径 `generated/art-xxx.jpg` 写进 .card 的 `picture_path`。
-
-### Step 2：写 .card
-
-用 write 工具写 JSON 到 `cards/in/000.card`（文件名前3位必须是数字）。用 `references/card-types.md` 的模板。
-
-**数值/正文处理原则**：
-- 用户给的数值 → **原样写入**，不自作主张调整。
-- 用户给的正文（已用规范术语）→ **原样写入**，不重写。
-- 走了 card-text-lint 的 → 写 lint 后的规范版本。
-- 走了 arkham-card-numbers 的 → 写配平后的数值；写完跑 `python3 skills/arkham-card-numbers/scripts/balance_check.py "$(cat cards/in/000.card)"`，error 清零，warning 给补偿理由。
-- **A 流程（用户给全的）不要跑 balance_check**——用户没要求校验。
-
-**picture_path**：
-- 用户发图 → `"picture_path": "inbox/xxx.jpg"`（**不加 @ 前缀**）
-- 自动画的 → `"picture_path": "generated/art-xxx.jpg"`
-- 升级卡 → 不填（用固定模板卡框）
-
-### Step 3：渲染 + 发图（不问确认，直接发）
-
-**渲染前硬门禁（每次必过，缺一不可渲染）**：
-
-```
-① .card 里有 picture_path 吗？
-   ├─ 有 → 渲染
-   └─ 没有 → ② 是升级卡吗？
-       ├─ 是 → 渲染（免插画）
-       └─ 否 → 停！你漏画了插画，回 Step 1 调 generate_image
-```
-
-渲染命令：
 ```bash
 mkdir -p cards/out
-.arkham/bin/arkham-cli render \
-  --corpus cards/in \
-  --assets .arkham/assets \
-  --workspace . \
-  --out cards/out
+.arkham/bin/arkham-cli render --corpus cards/in --assets .arkham/assets --workspace . --out cards/out
 ```
 - `--workspace .` **必须带**（解析 picture_path 相对路径）
 - 看 `[OK ]` / `[ERR]` 判断成功
-- 成功后 `send_image(cards/out/000.png)` 发卡图
+- 成功后输出在 `cards/out/000.png`
 
-### Step 4：发图后问「要改哪里」+ 询问是否要 .card 源文件
+## 加载规则（系统提示词的 skills-routing 已说明，这里只强调本技能视角）
 
-卡图发出去后，用 `send_message` 附一句简短的话，**不要长篇列字段**：
+- **用户输入完整**（数值+正文都给齐，正文用了规范术语）→ **只加载 diy-card**。
+- **正文是大白话** → 额外加载 `card-text-lint`。
+- **要设计数值** → 额外加载 `arkham-card-numbers`。
+- 不确定 → 先 `send_message` 问用户意图。
+
+---
+
+## 模式 A：生成卡图（固定 4 步，不要自由发挥）
+
+### Step 1：首条反馈 + 一轮并行启动
+
+收到制卡请求，**第一轮就并行做这两件事**（不要串行，不要先探索）：
+
+1. `send_message("收到，开始做这张卡，先画插画")` —— 首条反馈
+2. `load_skill("diy-card", { references: ["references/card-types.md"] })` —— 拿字段模板
+
+如果用户没发图且不是升级卡，**同一轮并行调**：
+3. `generate_image(description, type, n=2)` —— 画插画
+
+**不要在第一轮调 bash/read 探索目录**——你知道布局（见上）。直接 load_skill + generate_image。
+
+### Step 2：写 .card
+
+用 write 工具写 JSON 到 `cards/in/000.card`。用 `references/card-types.md` 的模板。
+
+**数值/正文处理原则**：
+- 用户给的数值 → **原样写入**
+- 用户给的正文（已用规范术语）→ **原样写入**
+- 走了 card-text-lint 的 → 写 lint 后的规范版本
+- 走了 arkham-card-numbers 的 → 写配平后的数值；写完跑 `python3 skills/arkham-card-numbers/scripts/balance_check.py "$(cat cards/in/000.card)"`，error 清零
+- **A 流程（用户给全的）不要跑 balance_check**
+
+**picture_path**（必须填，除非升级卡）：
+- 用户发图 → `"picture_path": "inbox/xxx.jpg"`（**不加 @ 前缀**）
+- 自动画的 → `"picture_path": "generated/art-xxx-1.jpg"`（用第 1 张）
+- 升级卡 → 不填
+
+### Step 3：渲染（固定命令，照抄）
+
+用上面的「渲染命令」一跑。**渲染命令是固定的，不要改路径、不要试别的参数**。失败了看 [ERR] 信息调整 .card 内容后重渲染。
+
+### Step 4：发图 + 交付
+
+`send_image(cards/out/000.png)` 发卡图，然后 `send_message` 附一句：
 ```
 出了，要改哪里告诉我（数值/正文/插画都可以调）。
 需要我把可编辑的 .card 源文件也发给你吗？要用编辑器自己改的话说一声。
 ```
 
-用户如果想要 .card 源文件 → 调 `send_card` 工具（filePath 填工作目录内的 .card 文件，如 `cards/in/000.card`）。用户拿到后可在卡牌编辑器里直接改字段。不要主动发文件——等用户说要才发。
-
-用户反馈后：
-- 改数值/正文 → edit .card → 重渲染 → 重发图
-- 改插画 → 换 `generated/art-xxx-2.jpg` 重渲染；两张都不满意 → 按用户反馈调描述重新 generate_image → 重渲染
-- 没问题 → 结束
+用户要 .card → 调 `send_card(cards/in/000.card)`。
 
 ---
 
 ## 模式 B：纯文本效果编写（不生成卡图）
 
-用户只想把大白话翻译成规范语法。
-
 1. `load_skill("card-text-lint")` 加载语法技能，按官方规范重写。
-2. `send_message` 把校准后的效果发给用户（如「帮你翻译成规范语法：使用(3耐久)。你得到+1👊… 要调整随时说」）。
+2. `send_message` 把校准后的效果发给用户。
 3. 用户确认后可问「要不要帮你生成卡图？」——说要就切到模式 A。
 
 ---
 
-## 字段缺失处理（最小发问原则）
+## generate_image 要点
 
-**能从上下文推断就推断**（用户说「守护者武器」→ 职业=守护者、类型=支援卡），不要问。
+- description 公式：`[主体+外观]+[动作/状态]+[环境]+[唯一光源]+[情绪]`。必须指定唯一光源（提灯/月光/窗口）；只写画面主体，风格词不用写（工具模板已带）。
+- 卡牌类型 → type 映射：
 
-**只在关键字段推断不了、且选错方向就全废时才 ask_user 一次**（如用户只说「做张卡」没说类型）：
-- 该问的：卡牌类型（支援/事件/技能/调查员/敌人/地点）、明确冲突的二选一字段。
-- **不该问的**：副标题、背景故事、画作、版权等可选字段（一律留空或默认，结果里标注「我假设了X」即可）。
+| 卡牌类型 | type |
+|---|---|
+| 调查员 / 盟友 | `character` |
+| 敌人 | `monster` |
+| 地点 / 场景 / 事件 / 诡计 / 密谋 | `scene` |
+| 支援（道具/武器/法术）/ 技能 | `item` |
+
+- `n` 用默认值 2，用第 1 张（`generated/art-xxx-1.jpg`）。
+- **绝对不要 read 生成的图片**——模型不支持图片输入，read 图片后后续对话会空回复卡死。
+- 生成失败 → 告诉用户「画插画失败了」，问他自己发图还是重试。
 
 ---
 
-## 图标语法速查（两种模式通用）
+## 字段缺失处理（最小发问）
+
+能从上下文推断就推断。只在关键字段推断不了、且选错方向就全废时才 ask_user 一次。副标题/背景故事等可选字段一律留空或默认。
+
+---
+
+## 图标语法速查
 
 body 里必须用 emoji，不用尖括号标签：
 
@@ -152,20 +137,16 @@ body 里必须用 emoji，不用尖括号标签：
 | 行动 | ➡️ | | 快速/反应 | ⚡ |
 | 回合结束 | ⭕ | | 独特 | 🏅 |
 
-常用写法：`得到+2👊`、`造成1点伤害`、`发现1个线索`、`获得2资源`、`【攻击】`、`【调查】`。
-被动触发（「在…后」「当…时」）用 ⭕ 反应图标，不要用 ⚡。
-完整标签参考见 `references/tag-reference.md`。
+被动触发（「在…后」「当…时」）用 ⭕ 不用 ⚡。完整标签参考见 `references/tag-reference.md`。
 
-## 常见错误提醒
+## 常见错误
 
-- **没有 picture_path 就直接渲染**（最严重）——用户没发图时必须先 generate_image 画插画写进 .card
-- **发预览等用户确认再渲染**（本技能已废除的旧流程）——直接渲染发图，结果说话
-- **替用户改数值/正文**（用户没要求时）——A 流程原样用用户给的
-- 调查员卡背的 `class` 必须和正面一致（漏填会用中立卡框）
-- 被动触发效果用 ⭕ 不用 ⚡
-- 渲染命令必须带 `--workspace .`
-- picture_path 不加 `@` 前缀
-- **不要 read 任何图片文件**（inbox/ 或 generated/ 的都不行）——模型不支持图片输入
+- 没画插画就渲染（必须先 generate_image）
+- 发预览等用户确认再渲染（直接做）
+- 替用户改数值/正文（用户没要求时）
+- 用 bash 探索目录（布局已知，直接用）
+- 渲染命令改路径（固定命令，照抄）
+- 调查员卡背的 `class` 必须和正面一致
 
 ## 参考文件索引
 
@@ -173,6 +154,6 @@ body 里必须用 emoji，不用尖括号标签：
 |---|---|
 | 查卡牌类型字段和 JSON 模板 | `references/card-types.md` |
 | 查完整富文本标签（emoji/花括号/方括号） | `references/tag-reference.md` |
-| 给用户的制卡引导（怎么做卡） | `references/guide.md` |
-| 数值配平（cost/属性/伤害预算） | 调用 `load_skill("arkham-card-numbers")` |
-| 卡牌正文语法校准（大白话→规范语法） | 调用 `load_skill("card-text-lint")` |
+| 给用户的制卡引导 | `references/guide.md` |
+| 数值配平 | 调用 `load_skill("arkham-card-numbers")` |
+| 卡牌正文语法校准 | 调用 `load_skill("card-text-lint")` |
