@@ -518,6 +518,25 @@ interface AnthropicMessagesResponse {
 
 /** 构造 Anthropic Messages 请求体。 */
 /**
+ * 根据传入的 thinkingLevel（options.reasoning）决定 thinking 参数。
+ *
+ * - off/undefined → { type: "disabled" }（不思考）
+ * - low/medium/high/max → { type: "enabled", budget_tokens: 对应预算 }
+ *
+ * DeepSeek 的 Anthropic 兼容端点支持 thinking:{type:enabled, budget_tokens}。
+ * 预算按级别递增（low=4k, medium=8k, high=16k, max=24k）。
+ * 注意：非流式桥接丢弃返回的 reasoning_content（无 signature 多轮 tool_use 会 400），
+ * 但仍发送 thinking 参数让模型用思考能力推理。
+ */
+function resolveThinking(options?: Record<string, unknown>): Record<string, unknown> {
+	const reasoning = (options as { reasoning?: string } | undefined)?.reasoning;
+	const BUDGETS: Record<string, number> = { minimal: 2048, low: 4096, medium: 8192, high: 16384, xhigh: 24576, max: 24576 };
+	if (!reasoning || reasoning === "off") return { type: "disabled" };
+	const budget = BUDGETS[reasoning] ?? 8192;
+	return { type: "enabled", budget_tokens: budget };
+}
+
+/**
  * 把一条 ToolResultMessage 转成 Anthropic 的 tool_result content block。
  * 多个连续 toolResult 合并到同一个 user 消息时，每个调一次此函数。
  */
@@ -594,8 +613,11 @@ function buildAnthropicRequestBody(
 		model: model.id,
 		max_tokens: (options as { maxTokens?: number } | undefined)?.maxTokens ?? model.maxTokens ?? 8192,
 		messages,
-		// 非流式桥接用于绕过兼容端点的 SSE 问题，显式关闭推理，避免服务端默认开启后耗尽输出上限。
-		thinking: { type: "disabled" },
+		// thinking 跟随 options.reasoning（pi-ai 传进来的 thinkingLevel）：
+		// off → thinking:disabled；其它（low/medium/high/max）→ thinking:{type:enabled, budget_tokens:...}
+		// 注意：非流式桥接丢弃返回的 reasoning_content（无 signature 多轮 tool_use 会 400），
+		// 但仍发送 thinking 参数让模型用思考能力推理（推理过程对模型输出质量有帮助，只是不持久化）。
+		thinking: resolveThinking(options),
 	};
 	if (context.systemPrompt) body.system = context.systemPrompt;
 
@@ -675,8 +697,8 @@ function buildRequestBody(
 	const body: Record<string, unknown> = {
 		model: model.id,
 		messages,
-		// 非流式桥接用于绕过兼容端点的 SSE 问题，显式关闭推理，避免服务端默认开启后耗尽输出上限。
-		thinking: { type: "disabled" },
+		// thinking 跟随 options.reasoning（同 anthropic 分支）。
+		thinking: resolveThinking(options),
 	};
 
 	const opts = options as { maxTokens?: number; temperature?: number } | undefined;
