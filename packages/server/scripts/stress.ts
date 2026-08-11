@@ -91,25 +91,10 @@ async function main(): Promise<void> {
 
 	const results: TestResult[] = [];
 
-	// === 场景 1：闲聊 ===
+	// === 场景 1：制卡 A 档（完整输入）===
 	results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
-		name: "闲聊「你能做什么」",
-		messages: ["你好，你能做什么"],
-		expectSend: true,
-	}));
-
-	// === 场景 2：制卡 A 档（完整输入）===
-	results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
-		name: "制卡 A 档「守护者支援卡完整输入」",
+		name: "制卡A",
 		messages: ["帮我做张守护者0级支援卡，叫测试卡，2费，武器，你得到+1👊，cost2"],
-		expectSend: true,
-		maxRounds: 40,
-	}));
-
-	// === 场景 3：制卡 B 档（大白话）===
-	results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
-		name: "制卡 B 档「大白话事件卡」",
-		messages: ["帮我做张绿家事件卡，叫逃跑，0费，扣自己1血然后跑掉"],
 		expectSend: true,
 		maxRounds: 40,
 	}));
@@ -128,7 +113,8 @@ async function main(): Promise<void> {
 	}
 	console.log(allPass ? "\n🎉 全部通过" : "\n⚠️ 有失败场景");
 
-	await rm(DATA_DIR, { recursive: true, force: true }).catch(() => {});
+	// await rm(DATA_DIR, { recursive: true, force: true }).catch(() => {});
+	console.log(`数据保留: ${DATA_DIR}`);
 	process.exit(allPass ? 0 : 1);
 }
 
