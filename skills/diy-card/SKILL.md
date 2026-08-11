@@ -29,15 +29,8 @@ inbox/        ← 用户发来的图片
 skills/       ← 技能源文件（只读）
 ```
 
-## 渲染命令（固定，照抄即可）
-
-```bash
-mkdir -p cards/out
-.arkham/bin/arkham-cli render --corpus cards/in --assets .arkham/assets --workspace . --out cards/out
-```
-- `--workspace .` **必须带**（解析 picture_path 相对路径）
-- 看 `[OK ]` / `[ERR]` 判断成功
-- 成功后输出在 `cards/out/000.png`
+## 渲染说明
+渲染通过 `render_card` 工具完成——传 JSON 内容，工具自动写文件 + 调 arkham-cli 渲染。你不需要手动跑 bash render。
 
 ## 加载规则（系统提示词的 skills-routing 已说明，这里只强调本技能视角）
 
@@ -55,22 +48,21 @@ mkdir -p cards/out
 收到制卡请求，**第一轮就并行做这两件事**（不要串行，不要先探索）：
 
 1. `send_message("收到，开始做这张卡，先画插画")` —— 首条反馈
-2. `load_skill("diy-card", { references: ["references/card-types.md"] })` —— 拿字段模板
+2. `generate_image(description, type)` —— 画插画（用户没发图且不是升级卡时）
 
-如果用户没发图且不是升级卡，**同一轮并行调**：
-3. `generate_image(description, type, n=2)` —— 画插画
+技能说明已经在你上下文里了，不需要加载。需要查字段模板时用 `read skills/diy-card/references/card-types.md`。
 
-**不要在第一轮调 bash/read 探索目录**——你知道布局（见上）。直接 load_skill + generate_image。
+**不要在第一轮调 bash/read 探索目录**——你知道布局（见上）。
 
-### Step 2：写 .card
+### Step 2：渲染卡图（用 render_card 工具，传 JSON 内容）
 
-用 write 工具写 JSON 到 `cards/in/000.card`。用 `references/card-types.md` 的模板。
+用 `render_card` 工具，把 .card 的 JSON 内容作为 `cardJson` 参数传入。工具内部自动写文件 + 渲染，返回图片路径（如 `cards/out/000.png`）。**不需要先 write 再 bash render——一步到位。**
 
 **数值/正文处理原则**：
-- 用户给的数值 → **原样写入**
-- 用户给的正文（已用规范术语）→ **原样写入**
+- 用户给的数值 → **原样写入** JSON
+- 用户给的正文（已用规范术语）→ **原样写入** JSON
 - 走了 card-text-lint 的 → 写 lint 后的规范版本
-- 走了 arkham-card-numbers 的 → 写配平后的数值；写完跑 `python3 skills/arkham-card-numbers/scripts/balance_check.py "$(cat cards/in/000.card)"`，error 清零
+- 走了 arkham-card-numbers 的 → 写配平后的数值；跑 balance_check，error 清零
 - **A 流程（用户给全的）不要跑 balance_check**
 
 **picture_path**（必须填，除非升级卡）：
@@ -78,11 +70,9 @@ mkdir -p cards/out
 - 自动画的 → `"picture_path": "generated/art-xxx-1.jpg"`（用第 1 张）
 - 升级卡 → 不填
 
-### Step 3：渲染（固定命令，照抄）
+查字段模板用 `read skills/diy-card/references/card-types.md`。
 
-用上面的「渲染命令」一跑。**渲染命令是固定的，不要改路径、不要试别的参数**。失败了看 [ERR] 信息调整 .card 内容后重渲染。
-
-### Step 4：发图 + 交付
+### Step 3：发图 + 交付
 
 `send_image(cards/out/000.png)` 发卡图，然后 `send_message` 附一句：
 ```

@@ -18,7 +18,7 @@ import type { PromptLoader } from "../prompts/prompt-loader.ts";
  *   scopeId 绑定；bwrap 断网。提示词是最弱的护栏，代码层才是硬墙。
  *
  * @param loader 已 load() 过的 PromptLoader 实例（通常由 BotManager 持有、共享给所有会话）
- * @param options scopeName/scopeKind/persona/skillsBlock
+ * @param options scopeName/scopeKind/persona/skillsContent
  */
 export function buildSystemPrompt(
 	loader: PromptLoader,
@@ -26,8 +26,8 @@ export function buildSystemPrompt(
 		scopeName: string;
 		scopeKind: "group" | "user";
 		persona?: string;
-		/** formatSkillsForSystemPrompt 的输出（已格式化好的技能清单 XML 块）。空则技能段不输出列表。 */
-		skillsBlock?: string;
+		/** 所有技能的完整内容（SKILL.md 全文），预加载到 system prompt。 */
+		skillsContent?: ReadonlyArray<{ name: string; content: string }>;
 	},
 ): string {
 	return loader.buildSystemPrompt(options);

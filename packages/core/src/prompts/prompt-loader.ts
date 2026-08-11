@@ -65,13 +65,18 @@ const RECORD_RULES_GROUP = [
 /** 私聊场景的「该记」规则。 */
 const RECORD_RULES_USER = "- **该记**：用户的身份/偏好（如「喜欢简洁回答」）、进行中的任务/约定、用户反馈的做事方式。";
 
-/** buildSystemPrompt 的入参（与旧 system-prompt.ts 保持兼容的形状）。 */
+/** buildSystemPrompt 的入参。 */
 export interface BuildSystemPromptOptions {
 	scopeName: string;
 	scopeKind: "group" | "user";
 	persona?: string;
-	/** formatSkillsForSystemPrompt 的输出（已格式化好的技能清单 XML 块）。空则技能段不输出「可用技能」列表。 */
-	skillsBlock?: string;
+	/**
+	 * 所有技能的完整内容（SKILL.md 全文），启动时预加载。
+	 * 直接注入 system prompt，省掉 load_skill 工具的往返轮次。
+	 * agent 仍可用 read 读 references/ 下的参考文件（按需）。
+	 * 空数组则不输出技能段。
+	 */
+	skillsContent?: ReadonlyArray<{ name: string; content: string }>;
 }
 
 /**
@@ -110,7 +115,7 @@ export class PromptLoader {
 	 */
 	buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		if (!this.files) throw new Error("PromptLoader.load() 未调用，无法构建系统提示词");
-		const { scopeName, scopeKind, persona, skillsBlock } = options;
+		const { scopeName, scopeKind, persona } = options;
 		const isGroup = scopeKind === "group";
 		const f = this.files;
 
@@ -122,9 +127,13 @@ export class PromptLoader {
 			isGroup ? f.messageFormatGroup : f.messageFormatUser,
 			f.memoryMechanism.replace("{{RECORD_RULES}}", isGroup ? RECORD_RULES_GROUP : RECORD_RULES_USER),
 		];
-		// skills-routing：有技能清单才输出整段（含 SKILLS_BLOCK 替换）。
-		// skillsBlock 为空时仍可输出路由规则段（让 agent 知道机制），但替换成「（当前无已加载技能）」。
-		const skillsBlockResolved = skillsBlock && skillsBlock.trim() ? skillsBlock : "（当前无已加载技能。）";
+		// skills-routing + 所有 SKILL.md 全文：预加载到 system prompt，省掉 load_skill 工具往返。
+		// 技能全文在静态前缀区（所有会话相同 → 缓存命中）。参考文件 agent 仍用 read 按需读。
+		const skillsText = (options.skillsContent ?? [])
+			.filter((s) => s.content.trim())
+			.map((s) => `<skill name="${s.name}">\n${s.content}\n</skill>`)
+			.join("\n\n");
+		const skillsBlockResolved = skillsText || "（当前无已加载技能。）";
 		parts.push(f.skillsRouting.replace("{{SKILLS_BLOCK}}", skillsBlockResolved));
 
 		// ---- 动态后缀（每 bot / 每 scope 不同）----

@@ -19,6 +19,7 @@ import {
 	PromptLoader,
 	createSendImageTool,
 	createSendCardTool,
+	createRenderCardTool,
 	createAskUserTool,
 	createGenerateImageTool,
 	loadSkillsFromDir,
@@ -180,6 +181,11 @@ async function runScenario(
 				createSendCardTool({
 					scopeId: scope.id, getReplyToMsgId, workspaceDir,
 					send: async () => { console.log("  [stub] send_card"); },
+				}),
+				createRenderCardTool({
+					workspaceDir,
+					arkhamBinPath: ARKHAM_BIN,
+					arkhamAssetsDir: ARKHAM_ASSETS,
 				}),
 				createAskUserTool({
 					getReplyToMsgId, pendingAskHolder, scopeKind: scope.kind,

@@ -19,26 +19,18 @@
 **关键认知**：一张用户已经写完整的卡（A 档），从渲染到发图全程**不需要** arkham-card-numbers 和 card-text-lint。即使别的技能正文里写着「交付前必须校验数值和语法」，**那针对的是你自己创作/修改卡牌的情况，不是用户已经给全了的情况。**
 
 ### 调用方式（必须并行，不要串行）
-当判断需要某个技能时，**调用 `load_skill` 工具**加载该技能的完整说明。
-load_skill 会返回 SKILL.md 全文 + 目录下的参考文件清单。**支持 references 参数**：
-- 调用时传 `{ name: "diy-card", references: ["references/card-types.md"] }` 能一次性把参考文件全文带回来，省得后续再 read。
+**所有技能的完整说明（SKILL.md）已经预加载到你的上下文里了**——你不需要调 load_skill 工具，直接按技能说明执行即可。
+
+需要查参考文件时，用 `read` 工具读技能目录下的 `references/*.md`（如 `skills/diy-card/references/card-types.md`）。
 
 **你的工具调用是并行执行的——一轮里能同时做的事必须一轮调完，不要拆成多轮串行。** 这是性能要求：每多一轮就多一次 LLM 往返（2-5 秒）。
 
 **制卡的标准第一轮（必须一轮并行完成，不要拆）**：
 ```
 一轮并行：
-├─ send_message("收到，开始做XX")          ← 首条反馈
-├─ load_skill("diy-card", {references:["references/card-types.md"]})  ← 拿模板
-└─ generate_image(插画描述)                ← 画插画（用户没发图时）
+├─ send_message("收到，开始做XX")     ← 首条反馈
+└─ generate_image(插画描述)           ← 画插画（用户没发图时）
 ```
-**不要**先 send_message 一轮、再 load_skill 一轮、再 generate_image 一轮——那样 3 轮变 1 轮。
+技能说明已在上文，不用加载。**不要**先 send_message 一轮、再 generate_image 一轮——一轮并行调完。
 
 **不要用 bash/read 探索工作目录**——技能说明里已经写清了目录布局和命令，直接用。探索只会浪费轮次。
-
-SKILL.md 是路由器——它会指引你：
-- 用 read 读 **references/** 下的详细参考文件（字段模板、标签规范等）
-- 用 bash 跑 **scripts/** 下的脚本
-- 调 load_skill 加载**其它技能**配合
-
-**按 SKILL.md 的工作流步骤执行**，但前提是当前任务真的进入了那个工作流（见上面的「加载前判断」）。

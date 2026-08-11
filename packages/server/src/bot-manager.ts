@@ -7,6 +7,7 @@ import {
 	SessionManager,
 	createSendImageTool,
 	createSendCardTool,
+	createRenderCardTool,
 	createAskUserTool,
 	createSearchCardsTool,
 	createGenerateImageTool,
@@ -456,15 +457,20 @@ export class BotManager {
 							await adapter.sendImage(scopeKey, filePath, replyToMsgId);
 						},
 					}),
-					createSendCardTool({
-						scopeId: scope.id,
-						getReplyToMsgId,
-						workspaceDir,
-						send: async (scopeId, filePath, replyToMsgId) => {
-							const scopeKey: ScopeKey = { kind: scope.kind, id: scopeId };
-							await adapter.sendFile(scopeKey, filePath, replyToMsgId);
-						},
-					}),
+				createSendCardTool({
+					scopeId: scope.id,
+					getReplyToMsgId,
+					workspaceDir,
+					send: async (scopeId, filePath, replyToMsgId) => {
+						const scopeKey: ScopeKey = { kind: scope.kind, id: scopeId };
+						await adapter.sendFile(scopeKey, filePath, replyToMsgId);
+					},
+				}),
+				createRenderCardTool({
+					workspaceDir,
+					arkhamBinPath: this.opts.arkhamBinPath,
+					arkhamAssetsDir: this.opts.arkhamAssetsDir,
+				}),
 					createAskUserTool({
 						getReplyToMsgId,
 						pendingAskHolder,

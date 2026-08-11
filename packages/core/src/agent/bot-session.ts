@@ -5,7 +5,6 @@ import {
 	type CompactionPreparation,
 	type FileOperations,
 	type ThinkingLevel,
-	formatSkillsForSystemPrompt,
 	Agent,
 	type StreamFn,
 	uuidv7,
@@ -22,7 +21,6 @@ import { join } from "node:path";
 import { buildSystemPrompt } from "./system-prompt.ts";
 import { createDefaultTools } from "../tools/index.ts";
 import { createSendMessageTool } from "../tools/send-message.ts";
-import { createLoadSkillTool } from "../tools/load-skill.ts";
 import type { PendingAskHolder } from "../tools/ask-user.ts";
 import { HistoryStore } from "../session/history.ts";
 import { MemoryFiles } from "../session/memory-files.ts";
@@ -170,12 +168,10 @@ export class ChatBotSession {
 						await opts.onSendMessage!(text);
 					},
 				})]
-			: [];
-		// load_skill 工具：agent 通过工具调用加载技能（比 read SKILL.md 更结构化）。
-		const loadSkillTool = opts.skills?.length
-			? [createLoadSkillTool({ skills: opts.skills })]
-			: [];
-		this.tools = [...createDefaultTools(opts.env), ...sendMessageTool, ...loadSkillTool, ...(opts.extraTools ?? [])];
+				: [];
+		// load_skill 工具已移除——所有 SKILL.md 全文预加载到 system prompt（见 activate）。
+		// agent 仍可用 read 工具读 references/ 下的参考文件（按需）。
+		this.tools = [...createDefaultTools(opts.env), ...sendMessageTool, ...(opts.extraTools ?? [])];
 	}
 
 	/** 激活：确保工作目录存在，读历史，构造 Agent。 */
@@ -191,7 +187,9 @@ export class ChatBotSession {
 			scopeName: this.opts.scopeName,
 			scopeKind: this.opts.scope.kind,
 			persona: this.opts.persona,
-			skillsBlock: this.opts.skills?.length ? formatSkillsForSystemPrompt(this.opts.skills) : "",
+			// 所有 SKILL.md 全文预加载到 system prompt（省掉 load_skill 工具往返轮次）。
+			// 参考文件（references/*.md）agent 仍用 read 按需读。
+			skillsContent: this.opts.skills?.map((s) => ({ name: s.name, content: s.content })),
 		});
 		this.systemPromptCache = systemPrompt;
 
