@@ -167,6 +167,9 @@ function nonStreamOpenAI(
 						await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
 						continue;
 					}
+					// 4xx 等不可重试错误：读 body 存 lastError，避免抛无信息的「API 返回失败」
+					lastError = `API ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`;
+					console.log(`[non-stream] ← ${res.status}: ${lastError}`);
 					break;
 				} catch (fetchErr) {
 					lastError = (fetchErr as Error).message;
@@ -384,6 +387,9 @@ function nonStreamAnthropic(
 						await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
 						continue;
 					}
+					// 4xx 等不可重试错误：读 body 存 lastError，避免抛无信息的「API 返回失败」
+					lastError = `API ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`;
+					console.log(`[non-stream:anthropic] ← ${res.status}: ${lastError}`);
 					break;
 				} catch (fetchErr) {
 					lastError = (fetchErr as Error).message;
