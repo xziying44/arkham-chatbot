@@ -26,8 +26,9 @@ import {
 } from "@arkham/chatbot-core";
 import { createExecutionEnv } from "@arkham/chatbot-sandbox";
 import { createNonStreamStreamFn } from "../src/non-stream-bridge.ts";
+import { buildModels } from "../src/app.ts";
 import { mkdir, rm } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { resolve } from "node:path";
 
 const DATA_DIR = resolve("./data-stress");
 const SKILLS_DIR = resolve("../../skills");
@@ -64,10 +65,16 @@ async function main(): Promise<void> {
 	await rm(DATA_DIR, { recursive: true, force: true }).catch(() => {});
 	await mkdir(DATA_DIR, { recursive: true });
 
-	// 1. 构建 Models（复刻 app.ts buildModels 的逻辑）
-	const models = await buildTestModels();
-	const model = models.getModel(MODEL_SPEC.split("/")[0] as never, MODEL_SPEC.split("/")[1]);
-	if (!model) throw new Error(`模型 ${MODEL_SPEC} 未找到`);
+	// 1. 构建 Models（复用 app.ts buildModels，与生产同路径）
+	const { models, model } = buildModels({
+		model: MODEL_SPEC,
+		anthropicBaseUrl: ANTHROPIC_BASE_URL,
+		openaiBaseUrl: process.env.OPENAI_BASE_URL,
+		thinkingLevel: THINKING_LEVEL,
+		sessionTtlMs: 3_600_000,
+		reaperIntervalMs: 60_000,
+		sandbox: { enabled: false, networkDisabled: false, timeoutSeconds: 60 },
+	});
 
 	// 2. 桥接 streamFn（复刻 app.ts）
 	const nativeStreamFn = (m: Model<any>, ctx: any, opts?: any) =>
@@ -218,45 +225,6 @@ async function runScenario(
 	const pass = !error && (opts.expectSend ? sentMessages.length > 0 : lastReply.length > 0);
 
 	return { name: opts.name, pass, replyText: lastReply, rounds, durationMs, sentMessages, error };
-}
-
-/** 复刻 app.ts buildModels 的 provider 注册（最小化）。 */
-async function buildTestModels(): Promise<Models> {
-	const { createModels } = await import("@earendil-works/pi-ai");
-	const builtin = await import("@earendil-works/pi-ai/providers/all");
-	const { anthropicProvider } = await import("@earendil-works/pi-ai/providers/anthropic");
-	const { openaiProvider } = await import("@earendil-works/pi-ai/providers/openai");
-
-	const models = createModels();
-	for (const p of builtin.builtinProviders()) {
-		(models as any).setProvider(p);
-	}
-
-	const [providerId, modelId] = MODEL_SPEC.split("/");
-	if (providerId === "anthropic" && ANTHROPIC_BASE_URL && ANTHROPIC_AUTH_TOKEN) {
-		const base = anthropicProvider();
-		const customModel: Model<"anthropic-messages"> = {
-			id: modelId, name: modelId, api: "anthropic-messages", provider: "anthropic",
-			baseUrl: ANTHROPIC_BASE_URL, reasoning: true,
-			contextWindow: 64000, maxTokens: 16384,
-			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
-		base.addModel(customModel as any);
-		(models as any).setProvider(base);
-		process.env.ANTHROPIC_AUTH_TOKEN = ANTHROPIC_AUTH_TOKEN;
-	} else if (providerId === "openai" && process.env.OPENAI_BASE_URL) {
-		const base = openaiProvider();
-		const customModel: Model<"openai-completions"> = {
-			id: modelId, name: modelId, api: "openai-completions", provider: "openai",
-			baseUrl: process.env.OPENAI_BASE_URL, reasoning: true,
-			contextWindow: 64000, maxTokens: 16384,
-			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
-		base.addModel(customModel as any);
-		(models as any).setProvider(base);
-	}
-
-	return models;
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
