@@ -4,6 +4,7 @@ import type {
 	Context,
 	Model,
 	ToolCall,
+	ToolResultMessage,
 	Usage,
 } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
@@ -516,6 +517,24 @@ interface AnthropicMessagesResponse {
 }
 
 /** 构造 Anthropic Messages 请求体。 */
+/**
+ * 把一条 ToolResultMessage 转成 Anthropic 的 tool_result content block。
+ * 多个连续 toolResult 合并到同一个 user 消息时，每个调一次此函数。
+ */
+function buildToolResultBlock(msg: ToolResultMessage): Record<string, unknown> {
+	const blocks = Array.isArray(msg.content) ? msg.content : [];
+	const text = blocks
+		.filter((b): b is { type: "text"; text: string } => typeof b === "object" && b !== null && (b as { type: string }).type === "text")
+		.map((b) => b.text)
+		.join("");
+	return {
+		type: "tool_result",
+		tool_use_id: msg.toolCallId,
+		content: text,
+		...(msg.isError ? { is_error: true } : {}),
+	};
+}
+
 function buildAnthropicRequestBody(
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -523,7 +542,8 @@ function buildAnthropicRequestBody(
 ): Record<string, unknown> {
 	const messages: unknown[] = [];
 
-	for (const msg of context.messages) {
+	for (let i = 0; i < context.messages.length; i++) {
+		const msg = context.messages[i];
 		if (msg.role === "user") {
 			const textParts: string[] = [];
 			if (typeof msg.content === "string") {
@@ -544,8 +564,6 @@ function buildAnthropicRequestBody(
 				const t = (b as { type: string }).type;
 				if (t === "text" && (b as { text: string }).text) {
 					content.push({ type: "text", text: (b as { text: string }).text });
-				} else if (t === "thinking") {
-					content.push({ type: "thinking", thinking: (b as { thinking: string }).thinking });
 				} else if (t === "toolCall") {
 					const tc = b as ToolCall;
 					content.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.arguments ?? {} });
@@ -553,15 +571,22 @@ function buildAnthropicRequestBody(
 			}
 			if (content.length > 0) messages.push({ role: "assistant", content });
 		} else if (msg.role === "toolResult") {
-			const blocks = Array.isArray(msg.content) ? msg.content : [];
-			const text = blocks
-				.filter((b): b is { type: "text"; text: string } => typeof b === "object" && b !== null && (b as { type: string }).type === "text")
-				.map((b) => b.text)
-				.join("");
-			messages.push({
-				role: "user",
-				content: [{ type: "tool_result", tool_use_id: msg.toolCallId, content: text }],
-			});
+			// 合并连续的 toolResult 到同一个 user 消息——Anthropic 格式要求：
+			// 一个 assistant 消息里的多个 tool_use，其 tool_result 必须合并在同一个
+			// user 消息里。如果每个 toolResult 独立一个 user 消息，DeepSeek 兼容端点
+			// 会判定「tool_use without tool_result」400（把第二个 user 当新输入而非回复）。
+			// 与 pi-ai 原生 convertMessages 的连续 toolResult 合并逻辑一致。
+			const toolResults: unknown[] = [];
+			// 当前的 toolResult
+			toolResults.push(buildToolResultBlock(msg));
+			// 收集后续连续的 toolResult
+			let j = i + 1;
+			while (j < context.messages.length && context.messages[j].role === "toolResult") {
+				toolResults.push(buildToolResultBlock(context.messages[j] as ToolResultMessage));
+				j++;
+			}
+			i = j - 1; // 跳过已处理的连续 toolResult
+			messages.push({ role: "user", content: toolResults });
 		}
 	}
 

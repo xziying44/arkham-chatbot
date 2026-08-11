@@ -88,7 +88,7 @@ test("Anthropic 兼容端点转换完整上下文并返回思考和文本", asyn
 			{
 				role: "assistant",
 				content: [
-					{ type: "thinking", thinking: "需要调用工具" },
+					// thinking block 被丢弃（无 signature 的 thinking 会导致 DeepSeek 多轮 tool_use 400）
 					{ type: "text", text: "正在查询" },
 					{ type: "tool_use", id: "call-old", name: "lookup", input: { keyword: "天气" } },
 				],
