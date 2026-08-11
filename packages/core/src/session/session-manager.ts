@@ -46,11 +46,6 @@ export interface SessionManagerOptions {
 		pendingAskHolder: PendingAskHolder,
 	) => AgentTool[];
 	/**
-	 * 中间消息发送回调。当 agent 在工具调用之间输出了文字时调用，
-	 * 让消息实时发送而非攒到最后。由 router 注入 adapter.sendText。
-	 */
-	readonly onIntermediateText?: (scope: ScopeKey, text: string, replyToMessageId?: string) => void;
-	/**
 	 * 发送消息回调。agent 调用 send_message 工具时触发。
 	 * agent 的文字输出不自动发送，只有主动调用 send_message 才发送。
 	 */
@@ -80,8 +75,8 @@ interface ActiveEntry {
  * 4. **断电续传**：磁盘上的 session.jsonl 让下次激活恢复上下文（增量落盘 + dispose 全量兜底）。
  */
 export class SessionManager {
-	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage" | "onAttachment">> &
-		Pick<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onIntermediateText" | "onSendMessage" | "onAttachment">;
+	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment">> &
+		Pick<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment">;
 	private readonly active = new Map<string, ActiveEntry>();
 	private reaperTimer: ReturnType<typeof setInterval> | undefined;
 	private shuttingDown = false;
@@ -100,7 +95,6 @@ export class SessionManager {
 			persona: opts.persona,
 			skills: opts.skills,
 			extraToolsFactory: opts.extraToolsFactory,
-			onIntermediateText: opts.onIntermediateText,
 			onSendMessage: opts.onSendMessage,
 			onAttachment: opts.onAttachment,
 		};
@@ -215,9 +209,6 @@ export class SessionManager {
 			extraTools,
 			replyToHolder,
 			pendingAskHolder,
-			onIntermediateText: this.opts.onIntermediateText
-				? (text: string) => this.opts.onIntermediateText!(scope, text, replyToHolder.current)
-				: undefined,
 			onSendMessage: this.opts.onSendMessage
 				? async (text: string) => this.opts.onSendMessage!(scope, text, replyToHolder.current)
 				: undefined,

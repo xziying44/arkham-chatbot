@@ -112,12 +112,6 @@ export interface BotSessionOptions {
 	 */
 	readonly replyToHolder?: { current?: string };
 	/**
-	 * 中间消息回调：当 agent 在工具调用之间输出了文字（如"让我查一下…""做好了"），
-	 * 立即通过此回调发送，而不是攒到最后。让对话更像真人——边想边说。
-	 * 最终回复仍然由 prompt() 返回值发送（router 负责）。
-	 */
-	readonly onIntermediateText?: (text: string) => void;
-	/**
 	 * 发送消息回调：agent 调用 send_message 工具时触发。
 	 * agent 的文字输出不自动发送——只有主动调用 send_message 才发送。
 	 */
@@ -208,6 +202,10 @@ export class ChatBotSession {
 				thinkingLevel: (this.opts.thinkingLevel ?? "off") as ThinkingLevel,
 			},
 			streamFn: this.opts.streamFn,
+			// 显式启用并行工具调用（pi-agent-core 默认即 parallel，显式声明更清晰）。
+			// 让 agent 一轮里能并行调多个工具（如 load_skill + generate_image 同时），
+			// 把多工具任务的往返轮次压到最少。
+			toolExecution: "parallel",
 			// 运行中上下文超阈值时触发压缩，避免长会话撑爆 context。
 			// 压缩后直接 mutate agent.state.messages（持久化在 dispose 时由 history.save 落盘）。
 			transformContext: async (messages) => this.runtimeCompactIfNeeded(messages),
@@ -300,7 +298,7 @@ export class ChatBotSession {
 		// 记录 run 前的消息数，结束后把本轮新增的消息增量追加到 session.jsonl，
 		// 这样即使进程被 kill，未触发 dispose 的对话也不会丢（dispose 时 history.save 仍会全量覆盖兜底）。
 		const beforeLen = this.agent.state.messages.length;
-		const collector = new AssistantTextCollector(hasSendTool ? undefined : this.opts.onIntermediateText);
+		const collector = new AssistantTextCollector();
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
 		try {
 			await this.agent.prompt(formattedText);
@@ -506,22 +504,20 @@ export class ChatBotSession {
 }
 
 /**
- * 订阅 Agent 事件，把 assistant 文本增量拼成一条完整回复。
+ * 收集 agent 的 assistant 文本，拼成最终回复。
+ *
+ * 不再「工具调用之间的中间文字立即发群」——那样一次制卡会刷 4-8 条消息。
+ * 现在所有 assistant 文字（中间轮 + 最终轮）都攒到 finalParts，由 runPrompt
+ * 统一处理：要么 agent 自己调了 send_message（已发，这里返回空），要么用最终文字兜底。
+ *
+ * 提示词层要求 agent「收到指令先发一条反馈」——这条反馈是 agent 主动调 send_message
+ * 发的，不靠这里自动转发，所以关掉自动发送不会让用户失去即时反馈。
+ *
  * 注意：pi 的事件流里，message_update 携带当前 partial；我们只在 message_end
  * （assistant 消息完成）时把该条消息的完整文本追加，避免拼接流式增量造成重复。
  */
-/**
- * 收集 agent 的 assistant 文本，并在工具调用之间产生中间文字时立即回调发送。
- *
- * Agent loop 每轮 LLM 调用结束会 emit message_end（带完整 assistant message）。
- * 如果这轮的 stopReason 是 "toolUse"（后面还有工具执行+更多轮），且 assistant
- * 输出了文字，这文字就是"中间消息"——应该立即发给用户，而不是攒到最后。
- * 最后一轮（stopReason="stop"）的文字由 prompt() 返回值发送。
- */
 class AssistantTextCollector {
 	private finalParts: string[] = [];
-
-	constructor(private readonly onIntermediateText?: (text: string) => void) {}
 
 	onEvent = (event: unknown): void => {
 		const e = event as {
@@ -539,14 +535,8 @@ class AssistantTextCollector {
 			.join("")
 			.trim();
 		if (!chunk) return;
-
-		// 如果这轮以 toolUse 结束（后面还有工具要执行），文字是中间消息，立即发送。
-		if (message.stopReason === "toolUse" && this.onIntermediateText) {
-			this.onIntermediateText(chunk);
-		} else {
-			// 最后一轮（stop/length）的文字作为最终回复返回。
-			this.finalParts.push(chunk);
-		}
+		// 所有轮（中间工具轮 + 最终轮）的文字都攒到 finalParts。
+		this.finalParts.push(chunk);
 	};
 
 	get text(): string {

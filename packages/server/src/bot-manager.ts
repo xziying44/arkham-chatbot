@@ -387,11 +387,9 @@ export class BotManager {
 				}
 				return tools;
 			},
-			// 中间消息：agent 在工具调用之间输出的文字立即发送，像真人边想边说。
-			onIntermediateText: (scope, text, replyToMessageId) => {
-				void adapter.sendText(scope, text, replyToMessageId).catch(() => {});
-			},
 			// send_message 工具：agent 主动调用时发送消息。
+			// 中间文字不再自动发群（旧 onIntermediateText 已删）——提示词层要求 agent
+			// 「收到指令先发一条反馈」，靠 agent 主动 send_message 实现，避免一次制卡刷 4-8 条。
 			onSendMessage: async (scope, text, replyToMessageId) => {
 				await adapter.sendText(scope, text, replyToMessageId);
 			},
