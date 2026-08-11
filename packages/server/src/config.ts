@@ -154,11 +154,12 @@ export function loadConfig(): AppConfig {
 		},
 		dataDir,
 		persona: process.env.CHATBOT_PERSONA,
-		dbPath: resolve(process.env.CHATBOT_DB_PATH ?? `${dataDir}/chatbot.db`),
+		dbPath: resolvePath(process.env.CHATBOT_DB_PATH, `${dataDir}/chatbot.db`),
 		admin: {
 			host: process.env.ADMIN_HOST ?? "127.0.0.1",
 			port: int("ADMIN_PORT", 5180),
-			webDistDir: optional("ADMIN_WEB_DIST"),
+			// 相对路径锚定到仓库根（同 skillsDir/promptsDir 的处理）。
+			webDistDir: process.env.ADMIN_WEB_DIST ? resolvePath(process.env.ADMIN_WEB_DIST, ".") : undefined,
 		},
 		bootstrapAdmin: {
 			username: process.env.ADMIN_USERNAME ?? "admin",
