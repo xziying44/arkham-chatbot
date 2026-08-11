@@ -121,7 +121,7 @@ async function main(): Promise<void> {
 	}
 	console.log(allPass ? "\n🎉 全部通过" : "\n⚠️ 有失败场景");
 
-	await rm(DATA_DIR, recursive: true, force: true).catch(() => {});
+	await rm(DATA_DIR, { recursive: true, force: true }).catch(() => {});
 	process.exit(allPass ? 0 : 1);
 }
 
