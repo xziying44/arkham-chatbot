@@ -140,8 +140,19 @@ async function runScenario(
 		model,
 		models,
 		streamFn,
-		envFactory: async (_scope, workspaceDir) =>
-			createExecutionEnv({ enabled: false, cwd: workspaceDir, networkDisabled: false, timeoutSeconds: 60 }),
+		envFactory: async (_scope, workspaceDir) => {
+			// 模拟生产的 readOnlyBinds：把 arkham-cli、assets、skills、cards-db 挂到 workspace
+			// NodeExecutionEnv 不支持 bwrap binds，用 symlink 代替
+			const { symlink, mkdir } = await import("node:fs/promises");
+			await mkdir(join(workspaceDir, ".arkham", "bin"), { recursive: true });
+			const arkhamBin = ARKHAM_BIN ?? join(String(process.env.ARKHAM_WORKSHOP_DIR ?? ""), "target", "release", "arkham-cli");
+			const arkhamAssets = ARKHAM_ASSETS ?? join(String(process.env.ARKHAM_WORKSHOP_DIR ?? ""), "assets");
+			try { await symlink(arkhamBin, join(workspaceDir, ".arkham", "bin", "arkham-cli")); } catch {}
+			try { await symlink(arkhamAssets, join(workspaceDir, ".arkham", "assets")); } catch {}
+			try { await symlink(SKILLS_DIR, join(workspaceDir, "skills")); } catch {}
+			if (CARD_DB_DIR) { try { await symlink(CARD_DB_DIR, join(workspaceDir, "cards-db")); } catch {} }
+			return createExecutionEnv({ enabled: false, cwd: workspaceDir, networkDisabled: false, timeoutSeconds: 60 });
+		},
 		ttlMs: 3_600_000,
 		thinkingLevel: THINKING_LEVEL,
 		skills,
