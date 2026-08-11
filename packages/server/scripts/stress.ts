@@ -140,7 +140,7 @@ async function runScenario(
 
 	// 每个场景独立 SessionManager（隔离历史）
 	const scenarioDir = resolve(DATA_DIR, opts.name.replace(/[^\w]/g, "_"));
-	await mkdir(scenarioDir, recursive: true).catch(() => {});
+	await mkdir(scenarioDir, { recursive: true }).catch(() => {});
 
 	const sessions = new SessionManager({
 		dataDir: scenarioDir,
