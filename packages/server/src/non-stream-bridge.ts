@@ -609,15 +609,23 @@ function buildAnthropicRequestBody(
 		}
 	}
 
+	const thinking = resolveThinking(options);
+	// thinking enabled 时，max_tokens 必须 > budget_tokens（Anthropic 要求），且留足正文空间。
+	// 否则思考占满 max_tokens，正文 0 token → stop=length → 空回复。
+	const baseMaxTokens = (options as { maxTokens?: number } | undefined)?.maxTokens ?? model.maxTokens ?? 8192;
+	const isThinkingEnabled = (thinking as { type?: string }).type === "enabled";
+	const budgetTokens = (thinking as { budget_tokens?: number }).budget_tokens ?? 0;
+	const maxTokens = isThinkingEnabled ? Math.max(baseMaxTokens, budgetTokens + 8192) : baseMaxTokens;
+
 	const body: Record<string, unknown> = {
 		model: model.id,
-		max_tokens: (options as { maxTokens?: number } | undefined)?.maxTokens ?? model.maxTokens ?? 8192,
+		max_tokens: maxTokens,
 		messages,
 		// thinking 跟随 options.reasoning（pi-ai 传进来的 thinkingLevel）：
 		// off → thinking:disabled；其它（low/medium/high/max）→ thinking:{type:enabled, budget_tokens:...}
 		// 注意：非流式桥接丢弃返回的 reasoning_content（无 signature 多轮 tool_use 会 400），
 		// 但仍发送 thinking 参数让模型用思考能力推理（推理过程对模型输出质量有帮助，只是不持久化）。
-		thinking: resolveThinking(options),
+		thinking,
 	};
 	if (context.systemPrompt) body.system = context.systemPrompt;
 
