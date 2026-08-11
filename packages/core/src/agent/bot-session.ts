@@ -73,6 +73,28 @@ function isCompactionSummary(m: AgentMessage): boolean {
 	return typeof m === "object" && m !== null && (m as { role?: string }).role === "compactionSummary";
 }
 
+/**
+ * 提取文字的第一句（用于首条反馈截断）。
+ *
+ * agent 常把「给用户的反馈 + 内部思考碎屑」写在同一轮文字里，例如：
+ *   "我来查下黛西。\n`search_cards` 不支持 trait，我用 query 查..."
+ * 整段发出去会泄露内部推理。截到第一个换行或句末标点（。！？.!?），
+ * 只保留真正要给用户看的那一句。
+ *
+ * 截断规则：取第一个换行前的内容；若没换行，取到第一个句末标点（含标点）。
+ * 结果去掉首尾空白；空串返回原文本（兜底，不丢反馈）。
+ */
+function firstSentence(text: string): string {
+	const trimmed = text.trim();
+	if (!trimmed) return trimmed;
+	// 优先按换行切——反馈通常是第一行，换行后是思考。
+	const byNewline = trimmed.split("\n")[0]?.trim();
+	if (byNewline) return byNewline;
+	// 没换行：按句末标点切（中英文）。
+	const m = trimmed.match(/^[^。！？.!?]*[。！？.!?]/);
+	return m ? m[0].trim() : trimmed;
+}
+
 /** 若消息是 compactionSummary，提取其 summary 文本；否则返回 undefined。 */
 function extractCompactionSummary(m: AgentMessage): string | undefined {
 	if (isCompactionSummary(m)) {
@@ -561,7 +583,11 @@ class AssistantTextCollector {
 			// 它们是思考碎屑，拼进回复会让回复变成所有思考的杂乱拼接）。
 			if (!this.firstIntermediateSent && this.onFirstIntermediate) {
 				this.firstIntermediateSent = true;
-				this.onFirstIntermediate(chunk);
+				// 只取第一句作为反馈——agent 常把「反馈 + 思考碎屑」写在同一轮文字里
+				// （如「我来查下黛西。\n`search_cards` 不支持 trait...」），整段发出去
+				// 会把内部思考（工具参数限制、推理过程）泄露给用户。截到第一个换行
+				// 或句号，只发真正要给用户看的那一句。
+				this.onFirstIntermediate(firstSentence(chunk));
 			}
 			return;
 		}
