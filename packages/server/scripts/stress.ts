@@ -28,7 +28,7 @@ import { createExecutionEnv } from "@arkham/chatbot-sandbox";
 import { createNonStreamStreamFn } from "../src/non-stream-bridge.ts";
 import { buildModels } from "../src/app.ts";
 import { mkdir, rm } from "node:fs/promises";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 
 const DATA_DIR = resolve("./data-stress");
 const SKILLS_DIR = resolve("../../skills");
