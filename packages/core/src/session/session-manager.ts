@@ -49,11 +49,6 @@ export interface SessionManagerOptions {
 		pendingAskHolder: PendingAskHolder,
 	) => AgentTool[];
 	/**
-	 * 首条中间文字回调。agent 第一个工具轮输出的文字立即发给用户（即时反馈）。
-	 * 只发第一条，后续工具轮文字不发（防刷屏）。由 server 注入 adapter.sendText。
-	 */
-	readonly onFirstIntermediate?: (scope: ScopeKey, text: string, replyToMessageId?: string) => void;
-	/**
 	 * 发送消息回调。agent 调用 send_message 工具时触发。
 	 * agent 的文字输出不自动发送，只有主动调用 send_message 才发送。
 	 */
@@ -84,7 +79,7 @@ interface ActiveEntry {
  */
 export class SessionManager {
 	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onFirstIntermediate" | "onSendMessage" | "onAttachment">> &
-		Pick<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "promptLoader" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onFirstIntermediate" | "onSendMessage" | "onAttachment">;
+		Pick<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "promptLoader" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment">;
 	private readonly active = new Map<string, ActiveEntry>();
 	private reaperTimer: ReturnType<typeof setInterval> | undefined;
 	private shuttingDown = false;
@@ -104,7 +99,6 @@ export class SessionManager {
 			skills: opts.skills,
 			promptLoader: opts.promptLoader,
 			extraToolsFactory: opts.extraToolsFactory,
-			onFirstIntermediate: opts.onFirstIntermediate,
 			onSendMessage: opts.onSendMessage,
 			onAttachment: opts.onAttachment,
 		};
@@ -230,9 +224,6 @@ export class SessionManager {
 			extraTools,
 			replyToHolder,
 			pendingAskHolder,
-			onFirstIntermediate: this.opts.onFirstIntermediate
-				? (text: string) => this.opts.onFirstIntermediate!(scope, text, replyToHolder.current)
-				: undefined,
 			onSendMessage: this.opts.onSendMessage
 				? async (text: string) => this.opts.onSendMessage!(scope, text, replyToHolder.current)
 				: undefined,

@@ -490,14 +490,10 @@ export class BotManager {
 				}
 				return tools;
 			},
-			// send_message 工具：agent 主动调用时发送消息。
+			// send_message 工具：agent 主动调用时发送消息（唯一对外发声渠道）。
+			// agent 的纯文字输出不自动发——任何要给用户看的内容（含反馈）都靠 agent 自己调 send_message。
 			onSendMessage: async (scope, text, replyToMessageId) => {
 				await adapter.sendText(scope, text, replyToMessageId);
-			},
-			// 首条中间文字：agent 第一个工具轮的文字立即发（即时反馈）。
-			// collector 保证只发第一条，后续工具轮文字不发——防一次制卡刷屏。
-			onFirstIntermediate: (scope, text, replyToMessageId) => {
-				void adapter.sendText(scope, text, replyToMessageId).catch(() => {});
 			},
 			// 附件下载：用户发图片时下载到 scope 的 workspace/inbox/。
 			onAttachment: async (scope, attachment) => {

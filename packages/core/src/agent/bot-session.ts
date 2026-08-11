@@ -73,28 +73,6 @@ function isCompactionSummary(m: AgentMessage): boolean {
 	return typeof m === "object" && m !== null && (m as { role?: string }).role === "compactionSummary";
 }
 
-/**
- * 提取文字的第一句（用于首条反馈截断）。
- *
- * agent 常把「给用户的反馈 + 内部思考碎屑」写在同一轮文字里，例如：
- *   "我来查下黛西。\n`search_cards` 不支持 trait，我用 query 查..."
- * 整段发出去会泄露内部推理。截到第一个换行或句末标点（。！？.!?），
- * 只保留真正要给用户看的那一句。
- *
- * 截断规则：取第一个换行前的内容；若没换行，取到第一个句末标点（含标点）。
- * 结果去掉首尾空白；空串返回原文本（兜底，不丢反馈）。
- */
-function firstSentence(text: string): string {
-	const trimmed = text.trim();
-	if (!trimmed) return trimmed;
-	// 优先按换行切——反馈通常是第一行，换行后是思考。
-	const byNewline = trimmed.split("\n")[0]?.trim();
-	if (byNewline) return byNewline;
-	// 没换行：按句末标点切（中英文）。
-	const m = trimmed.match(/^[^。！？.!?]*[。！？.!?]/);
-	return m ? m[0].trim() : trimmed;
-}
-
 /** 若消息是 compactionSummary，提取其 summary 文本；否则返回 undefined。 */
 function extractCompactionSummary(m: AgentMessage): string | undefined {
 	if (isCompactionSummary(m)) {
@@ -139,12 +117,6 @@ export interface BotSessionOptions {
 	 * 由 SessionManager 创建，与 extraToolsFactory 共享同一引用。
 	 */
 	readonly replyToHolder?: { current?: string };
-	/**
-	 * 首条中间文字回调：agent 在第一个工具轮输出的文字（如「收到，开始做XX」）
-	 * 立即通过此回调发给用户，作为收到指令后的即时反馈。**只发第一条**，后续工具轮
-	 * 文字不再发（防一次制卡刷屏）。由 SessionManager 注入 adapter.sendText。
-	 */
-	readonly onFirstIntermediate?: (text: string) => void;
 	/**
 	 * 发送消息回调：agent 调用 send_message 工具时触发。
 	 * agent 的文字输出不自动发送——只有主动调用 send_message 才发送。
@@ -331,7 +303,7 @@ export class ChatBotSession {
 		// 记录 run 前的消息数，结束后把本轮新增的消息增量追加到 session.jsonl，
 		// 这样即使进程被 kill，未触发 dispose 的对话也不会丢（dispose 时 history.save 仍会全量覆盖兜底）。
 		const beforeLen = this.agent.state.messages.length;
-		const collector = new AssistantTextCollector(this.opts.onFirstIntermediate);
+		const collector = new AssistantTextCollector();
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
 		try {
 			await this.agent.prompt(formattedText);
@@ -537,29 +509,21 @@ export class ChatBotSession {
 }
 
 /**
- * 收集 agent 的 assistant 文本，拼成最终回复；并在首个工具轮文字时给即时反馈。
+ * 收集 agent 的最终轮 assistant 文本，作为兜底回复。
  *
- * 设计（兼顾「即时反馈」「不刷屏」「回复干净」）：
- * - **首条中间文字立即发**：agent 在第一个工具轮（stopReason=toolUse）输出的文字，
- *   通过 onFirstIntermediate 回调立即发给用户——即时反馈。只发第一条。
- * - **后续中间文字丢弃**：第二个及以后的工具轮文字**直接扔掉**，不攒、不发。
- *   这些是 agent 的思考碎屑（如「整理一下用户提供的信息」「让我看看现有示例」），
- *   用户不需要看到，更不能拼进最终回复（否则回复会变成所有思考的拼接，又长又乱）。
- * - **最终轮文字作为回复**：最后一轮（stopReason=stop/length）的文字进 finalParts，
- *   作为 runPrompt 的返回值（最终回复）。如果 agent 调了 send_message，这条会被
- *   router 跳过（messageSentThisRun=true → 返回空）。
+ * 设计：**文字永不自动发给用户**。agent 要给用户发任何内容（包括反馈、结果、提问）
+ * 都必须自己调 `send_message` 工具——这样 agent 完全掌控发了什么、发了几条。
  *
- * 结果：单次请求 ≤2 条消息——首条即时反馈（首工具轮）+ 最终结果（最终轮或 send_message）。
- * 中间所有思考碎屑对用户不可见。
+ * 本 collector 只管一件事：如果 agent 没调 send_message（漏了），用最终轮
+ * （stopReason=stop/length）的文字兜底，避免用户收不到任何回复。
+ *
+ * 中间工具轮的文字（思考碎屑）一概忽略——它们是 agent 自言自语，不进回复。
  *
  * 注意：pi 的事件流里，message_update 携带当前 partial；我们只在 message_end
  * （assistant 消息完成）时取该条消息的完整文本，避免拼接流式增量造成重复。
  */
 class AssistantTextCollector {
 	private finalParts: string[] = [];
-	private firstIntermediateSent = false;
-
-	constructor(private readonly onFirstIntermediate?: (text: string) => void) {}
 
 	onEvent = (event: unknown): void => {
 		const e = event as {
@@ -571,27 +535,14 @@ class AssistantTextCollector {
 		if (!message || message.role !== "assistant") return;
 		const content = message.content;
 		if (!Array.isArray(content)) return;
+		// 只收最终轮（stop/length）的文字；工具轮的文字是思考碎屑，忽略。
+		if (message.stopReason === "toolUse") return;
 		const chunk = content
 			.filter((c): c is { type: "text"; text: string } => typeof c === "object" && c !== null && (c as { type: string }).type === "text")
 			.map((c) => c.text)
 			.join("")
 			.trim();
 		if (!chunk) return;
-
-		if (message.stopReason === "toolUse") {
-			// 工具轮文字：第一条发给用户（即时反馈），后续直接丢弃（不攒不发——
-			// 它们是思考碎屑，拼进回复会让回复变成所有思考的杂乱拼接）。
-			if (!this.firstIntermediateSent && this.onFirstIntermediate) {
-				this.firstIntermediateSent = true;
-				// 只取第一句作为反馈——agent 常把「反馈 + 思考碎屑」写在同一轮文字里
-				// （如「我来查下黛西。\n`search_cards` 不支持 trait...」），整段发出去
-				// 会把内部思考（工具参数限制、推理过程）泄露给用户。截到第一个换行
-				// 或句号，只发真正要给用户看的那一句。
-				this.onFirstIntermediate(firstSentence(chunk));
-			}
-			return;
-		}
-		// 最终轮（stop/length）的文字 → 作为回复内容。
 		this.finalParts.push(chunk);
 	};
 
