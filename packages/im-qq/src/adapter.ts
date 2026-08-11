@@ -136,6 +136,35 @@ export class QQAdapter implements ImAdapter {
 	}
 
 	/**
+	 * 发送本地文件（file_type=4）。
+	 *
+	 * 按文件大小自动选择上传方式：
+	 * - < 5MB：单次 base64 上传（sendFileBase64）
+	 * - 5MB–50MB：四步分片上传（uploadFileChunked）
+	 * - > 50MB：拒绝（QQ 文件软限制 200MB，这里更保守设 50MB）
+	 *
+	 * 上传拿到 file_info 后用 sendMedia（msg_type=7）发消息引用。
+	 */
+	async sendFile(scope: { kind: "group" | "user"; id: string }, filePath: string, replyToMessageId?: string): Promise<void> {
+		const target = this.toTarget(scope);
+		const { readFile } = await import("node:fs/promises");
+		const { basename } = await import("node:path");
+		const buffer = await readFile(filePath);
+		const fileName = basename(filePath);
+		const sizeMb = buffer.length / (1024 * 1024);
+		if (sizeMb > 50) {
+			throw new Error(`文件过大（${sizeMb.toFixed(1)}MB），上限 50MB`);
+		}
+		if (buffer.length >= 5 * 1024 * 1024) {
+			// 大文件分片上传
+			const fileInfo = await this.client.uploadFileChunked(target, buffer, fileName);
+			await this.client.sendMedia(target, fileInfo, replyToMessageId);
+		} else {
+			await this.client.sendFileBase64(target, buffer.toString("base64"), fileName, replyToMessageId);
+		}
+	}
+
+	/**
 	 * 发送带按钮的消息（markdown 正文 + 内嵌 keyboard）。
 	 * 失败时降级为纯文本（不含按钮）。
 	 */

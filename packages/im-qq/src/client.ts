@@ -5,8 +5,10 @@ import type {
 	KeyboardPayload,
 	MessageAuditResult,
 	SendMessageResult,
+	UploadPrepareResult,
 	WsGatewayInfo,
 } from "./types.ts";
+import { createHash } from "node:crypto";
 
 /** 发消息响应：普通返回 id/timestamp，命中审核返回 message_audit。 */
 export type SendOutcome = SendMessageResult | MessageAuditResult;
@@ -195,11 +197,18 @@ export class QQClient {
 	 * @param fileType 1=图片
 	 * @param fileData base64 编码的文件内容（不含 data: 前缀）
 	 */
-	async uploadFile(scope: ScopeTarget, fileType: FileType, fileData: string): Promise<string> {
+	async uploadFile(
+		scope: ScopeTarget,
+		fileType: FileType,
+		fileData: string,
+		opts?: { readonly fileName?: string; readonly uploadId?: string },
+	): Promise<string> {
 		const res = await this.authedPost(`${scope.path}/files`, {
 			file_type: fileType,
 			file_data: fileData,
 			srv_send_msg: false,
+			...(opts?.fileName ? { file_name: opts.fileName } : {}),
+			...(opts?.uploadId ? { upload_id: opts.uploadId } : {}),
 		});
 		if (!res.ok) {
 			throw new Error(`uploadFile(${scope.path}) failed: ${res.status} ${await res.text()}`);
@@ -223,6 +232,109 @@ export class QQClient {
 	async sendImageBase64(scope: ScopeTarget, fileData: string, msgId?: string): Promise<SendOutcome> {
 		const fileInfo = await this.uploadFile(scope, 1, fileData);
 		return this.sendMedia(scope, fileInfo, msgId);
+	}
+
+	/** 上传本地文件（file_type=4）并发送。小文件走单次 base64 上传。 */
+	async sendFileBase64(scope: ScopeTarget, fileData: string, fileName: string, msgId?: string): Promise<SendOutcome> {
+		const fileInfo = await this.uploadFile(scope, 4, fileData, { fileName });
+		return this.sendMedia(scope, fileInfo, msgId);
+	}
+
+	/**
+	 * 大文件分片上传第一步：预上传 upload_prepare。
+	 * 服务端返回 upload_id + 各分片的预签名 URL + 分片大小。
+	 */
+	async uploadPrepare(
+		scope: ScopeTarget,
+		params: { readonly fileType: FileType; readonly fileSize: number; readonly fileName: string; readonly md5: string; readonly sha1: string; readonly md5_10m: string },
+	): Promise<UploadPrepareResult> {
+		const res = await this.authedPost(`${scope.path}/upload_prepare`, {
+			file_type: params.fileType,
+			file_size: String(params.fileSize),
+			file_name: params.fileName,
+			md5: params.md5,
+			sha1: params.sha1,
+			md5_10m: params.md5_10m,
+		});
+		if (!res.ok) {
+			throw new Error(`uploadPrepare(${scope.path}) failed: ${res.status} ${await res.text()}`);
+		}
+		return (await res.json()) as UploadPrepareResult;
+	}
+
+	/**
+	 * 大文件分片上传第三步：每片 PUT 成功后调一次 upload_part_finish 确认。
+	 * 逐片确认，不要批量。
+	 */
+	async uploadPartFinish(
+		scope: ScopeTarget,
+		uploadId: string,
+		partIndex: number,
+		blockSize: number,
+		md5: string,
+	): Promise<void> {
+		const res = await this.authedPost(`${scope.path}/upload_part_finish`, {
+			upload_id: uploadId,
+			part_index: partIndex,
+			block_size: String(blockSize),
+			md5,
+		});
+		if (!res.ok) {
+			throw new Error(`uploadPartFinish(${scope.path}) part=${partIndex} failed: ${res.status} ${await res.text()}`);
+		}
+	}
+
+	/**
+	 * 大文件分片上传完整编排（upload_prepare → 逐片 PUT + upload_part_finish → 合并 POST /files）。
+	 *
+	 * 四步：
+	 * 1. 算全文件 md5/sha1 + 前 10002432 字节的 md5_10m → upload_prepare 拿 upload_id + parts
+	 * 2. 按服务端返回的 block_size 切文件，逐片 PUT 到 presigned_url（**直传 COS，不带 Authorization**）
+	 * 3. 每片 PUT 成功后调 upload_part_finish 确认
+	 * 4. 全部确认后 POST /files 带 upload_id 合并 → 返回 file_info
+	 *
+	 * @returns file_info 字符串（透传，别解析），供 sendMedia 引用发消息
+	 */
+	async uploadFileChunked(scope: ScopeTarget, fileBuffer: Buffer, fileName: string): Promise<string> {
+		const fileSize = fileBuffer.length;
+		// 校验值：全文件 md5/sha1，前 10002432 字节的 md5（秒传判断）。
+		const md5 = createHash("md5").update(fileBuffer).digest("hex");
+		const sha1 = createHash("sha1").update(fileBuffer).digest("hex");
+		const head10m = fileBuffer.subarray(0, 10_002_432);
+		const md5_10m = createHash("md5").update(head10m).digest("hex");
+
+		// ① upload_prepare
+		const prepare = await this.uploadPrepare(scope, { fileType: 4, fileSize, fileName, md5, sha1, md5_10m });
+		const { upload_id, parts } = prepare;
+
+		// ② 逐片 PUT 到预签名 URL（直传 COS，无 Authorization），③ 每片确认 upload_part_finish。
+		for (const part of parts) {
+			const start = part.index * Number(prepare.block_size);
+			const end = Math.min(start + Number(prepare.block_size), fileSize);
+			const chunk = fileBuffer.subarray(start, end);
+			// PUT 到 presigned_url（超时 30s，分片可能慢）。
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 30_000);
+			try {
+				const putRes = await fetch(part.presigned_url, {
+					method: "PUT",
+					headers: { "Content-Type": "application/octet-stream" },
+					body: chunk,
+					signal: controller.signal,
+				});
+				if (!putRes.ok) {
+					throw new Error(`分片 PUT part=${part.index} failed: ${putRes.status} ${await putRes.text()}`);
+				}
+			} finally {
+				clearTimeout(timer);
+			}
+			// 逐片确认。
+			const partMd5 = createHash("md5").update(chunk).digest("hex");
+			await this.uploadPartFinish(scope, upload_id, part.index, chunk.length, partMd5);
+		}
+
+		// ④ 合并 POST /files 带 upload_id → 返回 file_info。
+		return this.uploadFile(scope, 4, "", { fileName, uploadId: upload_id });
 	}
 
 	/**

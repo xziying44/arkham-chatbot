@@ -9,6 +9,8 @@ export type { BuildSystemPromptOptions as PromptBuildOptions } from "./prompts/p
 export { createDefaultTools, wrapHarnessTool, wrapHarnessTools } from "./tools/index.ts";
 export { createSendImageTool } from "./tools/send-image.ts";
 export type { CreateSendImageToolOptions, ImageSender, SendImageInput } from "./tools/send-image.ts";
+export { createSendCardTool } from "./tools/send-card.ts";
+export type { CreateSendCardToolOptions, CardSender, SendCardInput } from "./tools/send-card.ts";
 export { createSendMessageTool } from "./tools/send-message.ts";
 export type { CreateSendMessageToolOptions } from "./tools/send-message.ts";
 export { createAskUserTool } from "./tools/ask-user.ts";

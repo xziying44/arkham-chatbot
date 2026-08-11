@@ -133,6 +133,32 @@ export interface FileUploadResult {
 	ttl: number;
 }
 
+/** upload_prepare 返回的单个分片预签名信息。 */
+export interface UploadPart {
+	/** 分片序号（从 0 开始）。 */
+	index: number;
+	/** 直传腾讯云 COS 的预签名 URL，PUT 时不带 Authorization。 */
+	presigned_url: string;
+	/** 该分片的字节大小（字符串）。 */
+	block_size: string;
+}
+
+/** upload_prepare 返回体。 */
+export interface UploadPrepareResult {
+	/** 本次分片上传会话 id，后续 upload_part_finish 和合并都要带。 */
+	upload_id: string;
+	/** 服务端指定的分片大小（字符串），按这个切，别写死 5MB。 */
+	block_size: string;
+	/** 各分片的预签名信息。 */
+	parts: UploadPart[];
+	/** 上传配置（并发数、重试超时、重试间隔）。 */
+	upload_config?: {
+		concurrency?: number;
+		retry_timeout?: number;
+		retry_delay?: number;
+	};
+}
+
 /** QQ openapi 消息类型。0=文本，2=markdown，7=富媒体。 */
 export const MSG_TYPE = {
 	TEXT: 0,

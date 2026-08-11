@@ -21,6 +21,12 @@ export interface ImAdapter extends AsyncDisposable {
 	sendText(scope: ScopeKey, text: string, replyToMessageId?: string): Promise<void>;
 	/** 向某 scope 发送本地图片（filePath 为宿主机本地路径）。 */
 	sendImage(scope: ScopeKey, filePath: string, replyToMessageId?: string): Promise<void>;
+	/**
+	 * 向某 scope 发送本地文件（filePath 为宿主机本地路径）。
+	 * 用于把 agent 产出的文件（如 .card 卡牌源文件）发给用户编辑。
+	 * 实现负责按文件大小选单次/分片上传。
+	 */
+	sendFile(scope: ScopeKey, filePath: string, replyToMessageId?: string): Promise<void>;
 	/** 主动断开。AsyncDisposable 也走此路径。 */
 	disconnect(): Promise<void>;
 	/** 连接是否处于活跃状态。 */

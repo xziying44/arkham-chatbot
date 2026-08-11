@@ -6,6 +6,7 @@ import type { StreamFn, Skill, AgentTool } from "@earendil-works/pi-agent-core";
 import {
 	SessionManager,
 	createSendImageTool,
+	createSendCardTool,
 	createAskUserTool,
 	createSearchCardsTool,
 	createGenerateImageTool,
@@ -453,6 +454,15 @@ export class BotManager {
 						send: async (scopeId, filePath, replyToMsgId) => {
 							const scopeKey: ScopeKey = { kind: scope.kind, id: scopeId };
 							await adapter.sendImage(scopeKey, filePath, replyToMsgId);
+						},
+					}),
+					createSendCardTool({
+						scopeId: scope.id,
+						getReplyToMsgId,
+						workspaceDir,
+						send: async (scopeId, filePath, replyToMsgId) => {
+							const scopeKey: ScopeKey = { kind: scope.kind, id: scopeId };
+							await adapter.sendFile(scopeKey, filePath, replyToMsgId);
 						},
 					}),
 					createAskUserTool({
