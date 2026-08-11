@@ -481,10 +481,13 @@ export class BotManager {
 				return tools;
 			},
 			// send_message 工具：agent 主动调用时发送消息。
-			// 中间文字不再自动发群（旧 onIntermediateText 已删）——提示词层要求 agent
-			// 「收到指令先发一条反馈」，靠 agent 主动 send_message 实现，避免一次制卡刷 4-8 条。
 			onSendMessage: async (scope, text, replyToMessageId) => {
 				await adapter.sendText(scope, text, replyToMessageId);
+			},
+			// 首条中间文字：agent 第一个工具轮的文字立即发（即时反馈）。
+			// collector 保证只发第一条，后续工具轮文字不发——防一次制卡刷屏。
+			onFirstIntermediate: (scope, text, replyToMessageId) => {
+				void adapter.sendText(scope, text, replyToMessageId).catch(() => {});
 			},
 			// 附件下载：用户发图片时下载到 scope 的 workspace/inbox/。
 			onAttachment: async (scope, attachment) => {

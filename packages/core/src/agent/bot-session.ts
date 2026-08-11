@@ -118,6 +118,12 @@ export interface BotSessionOptions {
 	 */
 	readonly replyToHolder?: { current?: string };
 	/**
+	 * 首条中间文字回调：agent 在第一个工具轮输出的文字（如「收到，开始做XX」）
+	 * 立即通过此回调发给用户，作为收到指令后的即时反馈。**只发第一条**，后续工具轮
+	 * 文字不再发（防一次制卡刷屏）。由 SessionManager 注入 adapter.sendText。
+	 */
+	readonly onFirstIntermediate?: (text: string) => void;
+	/**
 	 * 发送消息回调：agent 调用 send_message 工具时触发。
 	 * agent 的文字输出不自动发送——只有主动调用 send_message 才发送。
 	 */
@@ -303,7 +309,7 @@ export class ChatBotSession {
 		// 记录 run 前的消息数，结束后把本轮新增的消息增量追加到 session.jsonl，
 		// 这样即使进程被 kill，未触发 dispose 的对话也不会丢（dispose 时 history.save 仍会全量覆盖兜底）。
 		const beforeLen = this.agent.state.messages.length;
-		const collector = new AssistantTextCollector();
+		const collector = new AssistantTextCollector(this.opts.onFirstIntermediate);
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
 		try {
 			await this.agent.prompt(formattedText);
@@ -509,20 +515,27 @@ export class ChatBotSession {
 }
 
 /**
- * 收集 agent 的 assistant 文本，拼成最终回复。
+ * 收集 agent 的 assistant 文本，拼成最终回复；并在首个工具轮文字时给即时反馈。
  *
- * 不再「工具调用之间的中间文字立即发群」——那样一次制卡会刷 4-8 条消息。
- * 现在所有 assistant 文字（中间轮 + 最终轮）都攒到 finalParts，由 runPrompt
- * 统一处理：要么 agent 自己调了 send_message（已发，这里返回空），要么用最终文字兜底。
+ * 设计（兼顾「即时反馈」与「不刷屏」）：
+ * - **首条中间文字立即发**：agent 在第一个工具轮（stopReason=toolUse）输出的文字，
+ *   通过 onFirstIntermediate 回调立即发给用户——这是用户收到指令后的即时反馈
+ *   （agent 会写「收到，开始做XX，先画插画」之类的话）。只发**第一条**，保证不刷屏。
+ * - **后续中间文字攒着**：第二个及以后的工具轮文字不再发送，攒到 finalParts，
+ *   与最终轮文字一起作为最终回复（或被 agent 自己的 send_message 覆盖）。
  *
- * 提示词层要求 agent「收到指令先发一条反馈」——这条反馈是 agent 主动调 send_message
- * 发的，不靠这里自动转发，所以关掉自动发送不会让用户失去即时反馈。
+ * 为什么不全靠 agent 主动 send_message：实测 agent 经常把反馈写成普通文字而非
+ * 调 send_message（提示词约束不可靠）。靠「首条中间文字自动发」兜底，保证用户
+ * 总能拿到即时反馈。单次请求 ≤2 条消息（首条反馈 + 最终结果）。
  *
  * 注意：pi 的事件流里，message_update 携带当前 partial；我们只在 message_end
- * （assistant 消息完成）时把该条消息的完整文本追加，避免拼接流式增量造成重复。
+ * （assistant 消息完成）时取该条消息的完整文本，避免拼接流式增量造成重复。
  */
 class AssistantTextCollector {
 	private finalParts: string[] = [];
+	private firstIntermediateSent = false;
+
+	constructor(private readonly onFirstIntermediate?: (text: string) => void) {}
 
 	onEvent = (event: unknown): void => {
 		const e = event as {
@@ -540,7 +553,16 @@ class AssistantTextCollector {
 			.join("")
 			.trim();
 		if (!chunk) return;
-		// 所有轮（中间工具轮 + 最终轮）的文字都攒到 finalParts。
+
+		// 工具轮（后面还有工具执行）的文字：
+		// - 第一条 → 立即发给用户（首条即时反馈），发完标记，不再发后续。
+		// - 后续 → 攒到 finalParts（避免一次制卡刷 4-8 条）。
+		if (message.stopReason === "toolUse" && this.onFirstIntermediate && !this.firstIntermediateSent) {
+			this.firstIntermediateSent = true;
+			this.onFirstIntermediate(chunk);
+			return;
+		}
+		// 最终轮（stop/length）的文字，或后续工具轮的文字，都攒到 finalParts。
 		this.finalParts.push(chunk);
 	};
 
