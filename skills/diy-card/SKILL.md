@@ -36,11 +36,13 @@ skills/       ← 技能源文件（只读）
 ## 渲染说明
 渲染通过 `render_card` 工具完成——传 JSON 内容，工具自动写文件 + 调 arkham-cli 渲染。你不需要手动跑 bash render。
 
-## 加载规则（系统提示词的 skills-routing 已说明，这里只强调本技能视角）
+## 参考文件查阅规则（系统提示词的 skills-routing 已说明，这里只强调本技能视角）
 
-- **用户输入完整**（数值+正文都给齐，正文用了规范术语）→ **只加载 diy-card**。
-- **正文是大白话** → 额外加载 `card-text-lint`。
-- **要设计数值** → 额外加载 `arkham-card-numbers`。
+所有技能说明（SKILL.md）已在你上下文里，**不需要 load_skill 工具**。需要查详细规则时用 `read` 工具读对应 references 文件：
+
+- **用户输入完整**（数值+正文都给齐，正文用了规范术语）→ **只查 diy-card 的 references**（如 card-types.md），用用户原文处理，不读其它。
+- **正文是大白话**（「扣血」「装上去后」）→ 额外 `read skills/card-text-lint/references/common-errors.md`（大白话→规范对照）。
+- **要设计数值** → 额外 `bash python3 skills/arkham-card-numbers/scripts/balance_check.py '<卡JSON>'` 配平。
 - 不确定 → 先 `send_message` 问用户意图。
 
 ---
@@ -89,7 +91,7 @@ skills/       ← 技能源文件（只读）
 
 ## 模式 B：纯文本效果编写（不生成卡图）
 
-1. `load_skill("card-text-lint")` 加载语法技能，按官方规范重写。
+1. `read skills/card-text-lint/references/common-errors.md`（大白话→规范对照）+ 按需 `read skills/card-text-lint/references/abilities.md`（能力句式），按官方规范重写。
 2. `send_message` 把校准后的效果发给用户。
 3. 用户确认后可问「要不要帮你生成卡图？」——说要就切到模式 A。
 
@@ -142,12 +144,13 @@ body 里必须用 emoji，不用尖括号标签：
 - 渲染命令改路径（固定命令，照抄）
 - 调查员卡背的 `class` 必须和正面一致
 
-## 参考文件索引
+## 参考文件索引（用 `read` 工具读，路径相对工作目录）
 
 | 你想做什么 | 读这个文件 |
 |---|---|
-| 查卡牌类型字段和 JSON 模板 | `references/card-types.md` |
-| 查完整富文本标签（emoji/花括号/方括号） | `references/tag-reference.md` |
-| 给用户的制卡引导 | `references/guide.md` |
-| 数值配平 | 调用 `load_skill("arkham-card-numbers")` |
-| 卡牌正文语法校准 | 调用 `load_skill("card-text-lint")` |
+| 查卡牌类型字段和 JSON 模板 | `skills/diy-card/references/card-types.md` |
+| 查完整富文本标签（emoji/花括号/方括号） | `skills/diy-card/references/tag-reference.md` |
+| 给用户的制卡引导 | `skills/diy-card/references/guide.md` |
+| 卡牌正文语法校准（大白话→规范对照） | `skills/card-text-lint/references/common-errors.md` |
+| 能力句式（行动/反应/双行动/费用） | `skills/card-text-lint/references/abilities.md` |
+| 数值配平 | `bash: python3 skills/arkham-card-numbers/scripts/balance_check.py '<卡JSON>'` |
