@@ -28,7 +28,7 @@ import {
 import { createExecutionEnv } from "@arkham/chatbot-sandbox";
 import { createNonStreamStreamFn } from "../src/non-stream-bridge.ts";
 import { buildModels } from "../src/app.ts";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, readdir, readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 
 const DATA_DIR = resolve("./data-stress");
@@ -53,6 +53,8 @@ interface TestResult {
 	durationMs: number;
 	sentMessages: string[];
 	error?: string;
+	/** render_card 写入的 .card 的 body 字段（用于校验正文翻译，如「花费两个行动」→➡️➡️）。 */
+	cardBody?: string;
 }
 
 /**
@@ -172,16 +174,19 @@ async function main(): Promise<void> {
 	const cardIndex = CARD_DB_DIR ? await loadCardIndex(CARD_DB_DIR, "cards-db").catch(() => []) : [];
 
 	const results: TestResult[] = [];
+	const ONLY = process.env.STRESS_ONLY; // 设置时只跑 name 含此值的场景（如 STRESS_ONLY=双行动）
+	const should = (name: string) => !ONLY || name.includes(ONLY);
+	if (ONLY) console.log(`>> 只跑 name 含「${ONLY}」的场景`);
 
 	// === 场景 1：闲聊 ===
-	results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+	if (should("闲聊")) results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
 		name: "闲聊",
 		messages: ["你好，你能做什么"],
 		expectSend: true,
 	}));
 
 	// === 场景 2：制卡 A 档（完整输入）===
-	results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+	if (should("制卡A")) results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
 		name: "制卡A",
 		messages: ["帮我做张守护者0级支援卡，叫测试卡，2费，武器，你得到+1👊，cost2"],
 		expectSend: true,
@@ -189,7 +194,7 @@ async function main(): Promise<void> {
 	}));
 
 	// === 场景 3：制卡 B 档（大白话）===
-	results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+	if (should("制卡B")) results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
 		name: "制卡B",
 		messages: ["帮我做张绿家事件卡，叫逃跑，0费，扣自己1血然后跑掉"],
 		expectSend: true,
@@ -197,10 +202,18 @@ async function main(): Promise<void> {
 	}));
 
 	// === 场景 4：同群两成员并发（验证每成员并行处理 + 群共享 transcript）===
-	results.push(await runConcurrentScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+	if (should("同群并发")) results.push(await runConcurrentScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
 		name: "同群并发",
 		memberA: { id: "memberA", text: "用一句话讲个冷笑话" },
 		memberB: { id: "memberB", text: "1加1等于几？只回数字" },
+	}));
+
+	// === 场景 5：双行动翻译（验证「花费两个行动」大白话 → ➡️➡️，不是 ➡️花费2行动：）===
+	if (should("双行动")) results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+		name: "双行动",
+		messages: ["帮我做张绿家事件卡叫疾行，0费，效果是花费两个行动抽取2张卡牌"],
+		expectSend: true,
+		maxRounds: 40,
 	}));
 
 	// === 汇总 ===
@@ -209,6 +222,7 @@ async function main(): Promise<void> {
 	for (const r of results) {
 		const status = r.pass ? "✅ PASS" : "❌ FAIL";
 		console.log(`${status} ${r.name} | ${r.durationMs}ms | ${r.rounds}轮 | send:${r.sentMessages.length}条`);
+		if (r.cardBody) console.log(`  body: ${r.cardBody}`);
 		if (!r.pass) {
 			allPass = false;
 			console.log(`  原因: ${r.error ?? "回复为空"}`);
@@ -327,10 +341,24 @@ async function runScenario(
 
 	await sessions.shutdown().catch(() => {});
 
+	// 读取 render_card 写入的 .card body（校验正文翻译：如「花费两个行动」是否翻成 ➡️➡️）
+	let cardBody: string | undefined;
+	try {
+		const cardDir = join(scenarioDir, "group", "stress-test", "cards", "in");
+		const files = await readdir(cardDir);
+		for (const f of files) {
+			if (f.endsWith(".card")) {
+				const data = JSON.parse(await readFile(join(cardDir, f), "utf8")) as { body?: string };
+				if (typeof data.body === "string") cardBody = data.body;
+			}
+		}
+	} catch { /* 无 .card 则跳过 */ }
+	if (cardBody) console.log(`  [card body]: ${cardBody.slice(0, 120)}${cardBody.length > 120 ? "..." : ""}`);
+
 	const durationMs = Date.now() - start;
 	const pass = !error && (opts.expectSend ? sentMessages.length > 0 : lastReply.length > 0);
 
-	return { name: opts.name, pass, replyText: lastReply, rounds, durationMs, sentMessages, error };
+	return { name: opts.name, pass, replyText: lastReply, rounds, durationMs, sentMessages, error, cardBody };
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
