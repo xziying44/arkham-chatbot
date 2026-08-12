@@ -245,6 +245,14 @@ async function main(): Promise<void> {
 		maxRounds: 40,
 	}));
 
+	// === 场景 9：多职阶卡（验证 class=多职阶 + subclass 填写 + 右上角职阶图标渲染）===
+	if (should("多职阶")) results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+		name: "多职阶",
+		messages: ["帮我做张多职阶支援卡，叫联合护符，2费1级，蓝家和绿家（守护者和流浪者），道具饰品，你得到+1👊。➡️横置此卡：你本次检定得到+1📚。"],
+		expectSend: true,
+		maxRounds: 40,
+	}));
+
 	// === 汇总 ===
 	console.log("\n=== 压测结果汇总 ===");
 	let allPass = true;
@@ -371,9 +379,11 @@ async function runScenario(
 
 	await sessions.shutdown().catch(() => {});
 
-	// 读取 render_card 写入的 .card：校验正文翻译（body）+ 插画嵌入（picture_base64）
+	// 读取 render_card 写入的 .card：校验正文翻译（body）+ 插画嵌入（picture_base64）+ class/subclass（多职阶诊断）
 	let cardBody: string | undefined;
 	let cardHasImage = false;
+	let cardClass: string | undefined;
+	let cardSubclass: string[] | undefined;
 	try {
 		// stress 沙箱没 bind 群共享 cards（和生产差异），.card 在成员私有 workspace；群共享路径作 fallback
 		const candidates = [
@@ -384,13 +394,15 @@ async function runScenario(
 			const files = await readdir(cardDir).catch(() => []);
 			for (const f of files) {
 				if (!f.endsWith(".card")) continue;
-				const data = JSON.parse(await readFile(join(cardDir, f), "utf8")) as { body?: string; picture_base64?: string };
+				const data = JSON.parse(await readFile(join(cardDir, f), "utf8")) as { body?: string; picture_base64?: string; class?: string; subclass?: string[] };
 				if (typeof data.body === "string" && !cardBody) cardBody = data.body;
 				if (typeof data.picture_base64 === "string" && data.picture_base64.length > 0) cardHasImage = true;
+				if (typeof data.class === "string" && !cardClass) { cardClass = data.class; cardSubclass = data.subclass; }
 			}
 		}
 	} catch { /* 无 .card 则跳过 */ }
 	if (cardBody) console.log(`  [card body]: ${cardBody.slice(0, 140)}${cardBody.length > 140 ? "..." : ""}`);
+	if (cardClass) console.log(`  [card class]: ${cardClass}${cardClass === "多职阶" ? ` subclass=${JSON.stringify(cardSubclass)}` : ""}`);
 	console.log(`  [card 含插画]: ${cardHasImage ? "✅ 是（picture_base64 已嵌入）" : "❌ 否（缺 picture_base64）"}`);
 
 	const durationMs = Date.now() - start;
