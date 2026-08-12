@@ -320,8 +320,18 @@ async function runScenario(
 					return {
 						...rt,
 						execute: async (id: any, params: any, signal: any, onUpdate: any) => {
-							console.log(`  [render] picturePath=${params.picturePath ?? "(无→不嵌图)"}`);
-							return rt.execute(id, params, signal, onUpdate);
+							const pp = params.picturePath;
+							if (pp) {
+								const abs = pp.startsWith("/") ? pp : join(workspaceDir, pp);
+								const { access } = await import("node:fs/promises");
+								try { await access(abs); console.log(`  [render] 图片存在 ✓ ${abs}`); }
+								catch { console.log(`  [render] 图片不存在 ✗ ${abs}`); }
+							}
+							console.log(`  [render] picturePath=${pp ?? "(无→不嵌图)"}`);
+							const result = await rt.execute(id, params, signal, onUpdate);
+							const text = (result as any).content?.[0]?.text ?? "";
+							console.log(`  [render] 返回: ${text.slice(0, 120)}`);
+							return result;
 						},
 					};
 				})(),
