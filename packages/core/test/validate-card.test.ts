@@ -113,10 +113,31 @@ test("body 含尖括号 XML 标签 <拳>：拦截", () => {
 
 test("body 含 <t>武器</t>：拦截", () => {
 	const issues = validateCard({
-		type: "支援卡", name: "x", class: "守护者", cost: 1, traits: ["武器"],
+		type: "事件卡", name: "x", class: "守护者", cost: 1, traits: ["武器"],
 		body: "<t>武器</t>。", language: "zh",
 	});
 	assert.ok(errMsgsOf(issues, "body").length >= 1);
+});
+
+test("body 含合法 <点>（选择列表）/ <i>（斜体）：不误报", () => {
+	const issues = validateCard({
+		type: "事件卡", name: "虚空", class: "潜修者", cost: 6, level: 3, traits: ["法术"],
+		body: "(选择一项或多项)：\n<点> 将场上所有盟友移出游戏。\n<点> 将场上所有道具移出游戏。\n<i>某说明</i>",
+		language: "zh",
+	});
+	assert.equal(errMsgsOf(issues, "body").length, 0, "<点>/<i> 是合法渲染标记，不应报 body 错误");
+});
+
+test("body 同时含合法 <点> 和非法 <拳>：只报 <拳>，不报 <点>", () => {
+	const issues = validateCard({
+		type: "事件卡", name: "x", class: "守护者", cost: 1, traits: [],
+		body: "<点> 选项A。\n<拳>造成伤害。",
+		language: "zh",
+	});
+	const errs = errMsgsOf(issues, "body");
+	assert.ok(errs.length >= 1, "应报 <拳>");
+	// illegal 列表（消息开头的"标签 X"）应是 <拳>；<点> 在白名单里被放行（消息尾部的"注"会提到 <点> 是合法的，那是说明不是误报）
+	assert.match(errs[0], /非法尖括号标签 <拳>/);
 });
 
 test("「<调查员>」在 enemy_health 字段值里：不算 body 尖括号（不误拦）", () => {

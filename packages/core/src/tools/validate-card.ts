@@ -89,10 +89,13 @@ const NUMERIC_FIELDS = new Set([
 const ARRAY_FIELDS = new Set(["traits", "subclass", "submit_icon", "location_link", "attribute"]);
 
 /**
- * body 里禁止尖括号 XML 标签（如 `<拳>` `<启动>` `<t>武器</t>`）——tag-reference.md 铁律。
- * 仅作用于 body 字段，不会误伤 `<调查员>` 缩放标记（那在 enemy_health/clues/threshold 等字段值里）。
+ * body 尖括号标签检测：匹配所有 `<...>`，再用白名单排除**合法渲染标记**。
+ * 合法（白名单，tag-reference.md 定义）：<点>（选择列表）、<i></i>（斜体）。
+ * 非法：其它一切尖括号标签——如 <拳> <启动> <反应> <t>武器</t>，渲染引擎用 emoji+【】语法不用这些。
+ * 仅作用于 body，不误伤 <调查员> 缩放标记（那在 enemy_health/clues/threshold 等字段值里）。
  */
-const ANGLE_BRACKET_RE = /<[^\s<>]+>/;
+const ANGLE_BRACKET_RE = /<[^\s<>]+>/g;
+const ALLOWED_ANGLE_TAGS = new Set(["<点>", "<i>", "</i>"]);
 
 /**
  * traits 不应含标点（括号 / 句号 / 换行）——特性应是单词（如「违法」「契约」）。
@@ -212,14 +215,17 @@ export function validateCard(card: unknown): CardIssue[] {
 		});
 	}
 
-	// 9. body 尖括号 XML 禁令（tag-reference.md 铁律）
-	if (typeof c.body === "string" && ANGLE_BRACKET_RE.test(c.body)) {
-		issues.push({
-			severity: "error",
-			field: "body",
-			message: "body 含尖括号 XML 标签（如 <拳> <启动> <t>武器</t>）——渲染引擎用 emoji+【】语法，不用尖括号。",
-			hint: "属性图标用 emoji（🧠意志/📚智力/👊战力/🦶敏捷），行动用 ➡️/⚡/⭕，特性引用用花括号 {武器}。见 tag-reference.md。",
-		});
+	// 9. body 尖括号标签禁令（tag-reference.md 铁律）：<点>/<i> 是合法渲染标记，其余 <...> 非法
+	if (typeof c.body === "string") {
+		const illegal = (c.body.match(ANGLE_BRACKET_RE) ?? []).filter((m) => !ALLOWED_ANGLE_TAGS.has(m));
+		if (illegal.length > 0) {
+			issues.push({
+				severity: "error",
+				field: "body",
+				message: `body 含非法尖括号标签 ${illegal.join("、")}——属性图标/行动前缀用 emoji（🧠📚👊🦶 / ➡️⚡⭕），特性引用用花括号 {武器}。注：<点>（选择列表）、<i>（斜体）是合法渲染标记，不报错。`,
+				hint: "见 tag-reference.md。",
+			});
+		}
 	}
 
 	// 10. 字段类型（数字型 / 数组型）
