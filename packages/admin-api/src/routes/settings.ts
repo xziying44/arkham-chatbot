@@ -42,12 +42,17 @@ const PROMPT_TEMPLATE = `<system_directive>
 
 </system_directive>
 
-（身份段按会话类型不同）：
-- 群聊：「你是「<群 id>」这个群的机器人助手……」+ 群消息格式说明（<昵称>: 前缀、合并送达、引用回复）
-- 私聊：「你是用户的私聊机器人助手（会话 id：<用户 id>）……」+ 私聊消息格式说明（无前缀）
+（消息格式段按会话类型不同）：
+- 群聊：群消息格式说明（[openid]: 前缀、@ 人、引用回复）
+- 私聊：私聊消息格式说明（无前缀）
 
-## 你的设定
-<机器人 persona（在机器人编辑里改）>
+—— 系统提示词到此为止（纯静态，跨会话字节一致，命中 prompt cache）——
+
+<session_context>（系统提示词之后的「下一块」，每会话动态：身份/群 id/当前群员 openid/persona）
+身份：你是「<群 id>」这个群的机器人助手。
+当前对话群员 openid：<openid>
+设定：<机器人 persona（在机器人编辑里改）>
+</session_context>
 
 （工具的 name/description 由 pi-agent-core 通过 function-calling tools API 单独发给 LLM，不在此拼接）
 

@@ -28,6 +28,13 @@ export interface EnvFactoryOptions {
 	 *   agent 也能用同样的路径读到挂载内容。
 	 */
 	readonly readOnlyBinds?: readonly (readonly [string, string])[];
+	/**
+	 * 额外读写挂载（host 路径 → 沙箱内路径）。用于把**共享**目录（如群级 memories）
+	 * 可读写挂载到沙箱内，让多个成员会话看到同一份文件。
+	 * - 生产 bwrap：用 `--bind host container`。
+	 * - 开发回退：同样建 symlink（symlink 本身不限制读写，目标可写即可）。
+	 */
+	readonly writableBinds?: readonly (readonly [string, string])[];
 }
 
 /**
@@ -48,12 +55,14 @@ export async function createExecutionEnv(options: EnvFactoryOptions): Promise<Ex
 			networkDisabled: options.networkDisabled ?? true,
 			shellPath: options.shellPath,
 			readOnlyBinds: options.readOnlyBinds,
+			writableBinds: options.writableBinds,
 		});
 		return new GuardedExecutionEnv(base);
 	}
-	// 开发模式（macOS / disabled）：NodeExecutionEnv 不认 readOnlyBinds。
-	// 为每个 bind 建 symlink，让 agent 用同样的沙箱内路径也能读到宿主内容。
+	// 开发模式（macOS / disabled）：NodeExecutionEnv 不认 binds。
+	// 为每个 bind 建 symlink，让 agent 用同样的沙箱内路径也能读到/写到宿主内容。
 	await ensureDevSymlinks(options.cwd, options.readOnlyBinds ?? []);
+	await ensureDevSymlinks(options.cwd, options.writableBinds ?? []);
 	const base: ExecutionEnv = new NodeExecutionEnv({ cwd: options.cwd, shellPath: options.shellPath });
 	return new GuardedExecutionEnv(base);
 }

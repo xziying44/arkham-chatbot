@@ -8,6 +8,7 @@ import {
 	createSendImageTool,
 	createSendCardTool,
 	createRenderCardTool,
+	createValidateCardTool,
 	createAskUserTool,
 	createSearchCardsTool,
 	createGenerateImageTool,
@@ -44,6 +45,8 @@ export interface BotManagerOptions {
 	readonly sandbox: SandboxConfig;
 	readonly sessionTtlMs: number;
 	readonly reaperIntervalMs: number;
+	/** 每群最大并发 agent run 数（默认 3）。超出排队，避免 N 人同时发指令打爆 LLM 端点。 */
+	readonly groupMaxConcurrent?: number;
 	/** 思考程度: off/low/medium/high/max。传给 Agent 控制思考开关与强度。 */
 	readonly thinkingLevel?: string;
 	/** 消息流水仓库（路由器入站/出站落库用）。可选。 */
@@ -411,30 +414,47 @@ export class BotManager {
 			model: this.opts.model,
 			models: this.opts.models,
 			streamFn: this.opts.streamFn,
-			envFactory: async (_scope, workspaceDir, scopeDir) =>
-				createExecutionEnv({
+			envFactory: async (ctx) => {
+				const ws = ctx.workspaceDir;
+				// 群成员的群级共享目录可读写挂载进沙箱（多成员 bind 同一宿主目录 → 天然共享）：
+				// - memories  → workspace/memories  （全群共享记忆）
+				// - cards     → workspace/cards     （群共享卡牌库；render_card 写这里、send_card 从这里发，全群可见）
+				// - generated → workspace/generated （群共享文生图，插画全群复用）
+				// 私聊：cards/generated 就在用户自己 workspace 下（不另挂）；memories 同理。
+				const writableBinds: readonly (readonly [string, string])[] =
+					ctx.scope.kind === "group"
+						? [
+							[ctx.memoriesDir, `${ws}/memories`],
+							...(ctx.cardsDir ? [[ctx.cardsDir, `${ws}/cards`] as const] : []),
+							...(ctx.generatedDir ? [[ctx.generatedDir, `${ws}/generated`] as const] : []),
+						]
+						: [];
+				return createExecutionEnv({
 					enabled: this.opts.sandbox.enabled,
-					cwd: workspaceDir,
+					cwd: ws,
 					networkDisabled: this.opts.sandbox.networkDisabled,
 					timeoutSeconds: this.opts.sandbox.timeoutSeconds,
 					// 只读挂载（host → 沙箱内 workspace 下固定路径）：
-					// - 历史归档 → workspace/history/（agent 可查阅但无法篡改）
+					// - 该会话自己的 history/ 归档 → workspace/history/（agent 可查阅但无法篡改）
+					// - 群共享 transcript（仅群聊）→ workspace/group-feed.jsonl（查阅其他成员对话）
 					// - 技能源目录 → workspace/skills/（agent 用 read 读 SKILL.md + 附件）
 					// - arkham-cli 资产 → workspace/.arkham/assets（DIY 卡图技能用）
 					// - arkham-cli 二进制 → workspace/.arkham/bin/arkham-cli（单文件 ro-bind）
 					// - 卡牌数据库 → workspace/cards-db/（search_cards 工具查询 + 发图）
-					// 用 workspace 下的相对路径而非 /opt/arkham/，避免 macOS 开发模式下
-					// /opt 不可写的权限问题。bwrap 的 --ro-bind 支持嵌套在 rw workspace 内。
 					readOnlyBinds: [
-						[`${scopeDir}/history`, `${workspaceDir}/history`],
-						[this.opts.skillsDir, `${workspaceDir}/skills`],
-						...(this.opts.arkhamAssetsDir ? [[this.opts.arkhamAssetsDir, `${workspaceDir}/.arkham/assets`] as const] : []),
-						...(this.opts.arkhamBinPath ? [[this.opts.arkhamBinPath, `${workspaceDir}/.arkham/bin/arkham-cli`] as const] : []),
-						...(this.opts.cardDatabaseDir ? [[this.opts.cardDatabaseDir, `${workspaceDir}/cards-db`] as const] : []),
+						[`${ctx.sessionDir}/history`, `${ws}/history`],
+						...(ctx.transcriptPath ? [[ctx.transcriptPath, `${ws}/group-feed.jsonl`] as const] : []),
+						[this.opts.skillsDir, `${ws}/skills`],
+						...(this.opts.arkhamAssetsDir ? [[this.opts.arkhamAssetsDir, `${ws}/.arkham/assets`] as const] : []),
+						...(this.opts.arkhamBinPath ? [[this.opts.arkhamBinPath, `${ws}/.arkham/bin/arkham-cli`] as const] : []),
+						...(this.opts.cardDatabaseDir ? [[this.opts.cardDatabaseDir, `${ws}/cards-db`] as const] : []),
 					],
-				}),
+					writableBinds,
+				});
+			},
 			ttlMs: this.opts.sessionTtlMs,
 			reaperIntervalMs: this.opts.reaperIntervalMs,
+			groupMaxConcurrent: this.opts.groupMaxConcurrent,
 			thinkingLevel: this.opts.thinkingLevel,
 			persona: config.persona ?? undefined,
 			skills: this.skills,
@@ -471,7 +491,10 @@ export class BotManager {
 					arkhamBinPath: this.opts.arkhamBinPath,
 					arkhamAssetsDir: this.opts.arkhamAssetsDir,
 				}),
-					createAskUserTool({
+				// validate_card：让 agent 在 render_card 前主动自查 .card 字段/枚举/语法错误
+				// （render_card/send_card 执行前已强制校验拦截；此工具供 agent 提前发现省往返）
+				createValidateCardTool(),
+				createAskUserTool({
 						getReplyToMsgId,
 						pendingAskHolder,
 						scopeKind: scope.kind,
@@ -501,16 +524,21 @@ export class BotManager {
 			onSendMessage: async (scope, text, replyToMessageId) => {
 				await adapter.sendText(scope, text, replyToMessageId);
 			},
-			// 附件下载：用户发图片时下载到 scope 的 workspace/inbox/。
-			onAttachment: async (scope, attachment) => {
-				const inboxDir = join(this.botDataDir(config.id), scope.kind, scope.id, "workspace", "inbox");
+			// 附件下载：用户发图片时下载到该会话 workspace/inbox/。
+			// 群成员会话：下载到 <bot>/group/<gid>/members/<memberId>/workspace/inbox/。
+			// 私聊：下载到 <bot>/user/<uid>/workspace/inbox/。
+			onAttachment: async (scope, memberId, attachment) => {
+				const sessionDir = scope.kind === "group"
+					? join(this.botDataDir(config.id), "group", scope.id, "members", memberId ?? "")
+					: join(this.botDataDir(config.id), "user", scope.id);
+				const inboxDir = join(sessionDir, "workspace", "inbox");
 				await mkdir(inboxDir, { recursive: true });
 				const ext = attachment.filename.match(/\.[^.]+$/)?.[0] ?? ".jpg";
 				const filename = `${Date.now()}_${attachment.filename.replace(/[^\w.-]/g, "_")}`.slice(0, 60) || `${Date.now()}${ext}`;
 				const filePath = join(inboxDir, filename);
 				const buffer = await adapter.downloadAttachment!(attachment.url);
 				await writeFile(filePath, buffer);
-				console.log(`[bot] 附件已下载 scope=${scope.kind}:${scope.id} → inbox/${filename} (${buffer.length} bytes)`);
+				console.log(`[bot] 附件已下载 scope=${scope.kind}:${scope.id}${memberId ? ` member=${memberId}` : ""} → inbox/${filename} (${buffer.length} bytes)`);
 				return `inbox/${filename}`;
 			},
 		});

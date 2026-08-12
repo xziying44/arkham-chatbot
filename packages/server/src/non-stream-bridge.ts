@@ -609,6 +609,14 @@ function buildAnthropicRequestBody(
 		}
 	}
 
+	// cache_control 断点（Anthropic prompt cache）：从 options.cacheRetention 解析，
+	// 默认 "short"（即 {type:"ephemeral"}）。"none" → 不加断点（不缓存）。
+	// 在三处打 cache_control 断点：system 末尾、最后一个 tool、最后一条 user 消息
+	// （参照 pi-ai anthropic-messages.js 的 buildParams）。桥接此前完全没打断点 →
+	// 缓存从未生效（cache_read_input_tokens 恒为 0）。
+	const cacheRetention = (options as { cacheRetention?: string } | undefined)?.cacheRetention ?? "short";
+	const cacheControl = cacheRetention === "none" ? undefined : { type: "ephemeral" as const };
+
 	const thinking = resolveThinking(options);
 	// thinking enabled 时，max_tokens 必须 > budget_tokens（Anthropic 要求），且留足正文空间。
 	// 否则思考占满 max_tokens，正文 0 token → stop=length → 空回复。
@@ -627,17 +635,46 @@ function buildAnthropicRequestBody(
 		// 但仍发送 thinking 参数让模型用思考能力推理（推理过程对模型输出质量有帮助，只是不持久化）。
 		thinking,
 	};
-	if (context.systemPrompt) body.system = context.systemPrompt;
+	if (context.systemPrompt) {
+		// system 用数组形式才能携带 cache_control；纯字符串形式不行。
+		body.system = cacheControl
+			? [{ type: "text", text: context.systemPrompt, cache_control: cacheControl }]
+			: context.systemPrompt;
+	}
 
 	const opts = options as { temperature?: number } | undefined;
 	if (opts?.temperature !== undefined) body.temperature = opts.temperature;
 
 	if (context.tools && context.tools.length > 0) {
-		body.tools = context.tools.map((t) => ({
-			name: t.name,
-			description: t.description,
-			input_schema: t.parameters ?? { type: "object", properties: {} },
-		}));
+		const toolsList = context.tools;
+		body.tools = toolsList.map((t, idx) => {
+			const tool: Record<string, unknown> = {
+				name: t.name,
+				description: t.description,
+				input_schema: t.parameters ?? { type: "object", properties: {} },
+			};
+			// 最后一个工具打断点（tools 段稳定 → 跨轮命中）。
+			if (cacheControl && idx === toolsList.length - 1) {
+				tool.cache_control = cacheControl;
+			}
+			return tool;
+		});
+	}
+
+	// 最后一条 user 消息的最后一个 content block 打断点（消息前缀稳定 → 跨轮命中）。
+	// 这一步必须在 messages 全部构建完之后做。messages 元素是本函数内新建的对象，可安全 mutate。
+	if (cacheControl) {
+		for (let k = messages.length - 1; k >= 0; k--) {
+			const m = messages[k] as { role?: string; content?: unknown };
+			if (m.role === "user") {
+				if (typeof m.content === "string") {
+					m.content = [{ type: "text", text: m.content, cache_control: cacheControl }];
+				} else if (Array.isArray(m.content) && m.content.length > 0) {
+					(m.content[m.content.length - 1] as Record<string, unknown>).cache_control = cacheControl;
+				}
+				break;
+			}
+		}
 	}
 
 	return body;

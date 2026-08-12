@@ -8,7 +8,7 @@ import MessageList from "../components/MessageList";
 import { fmtTime } from "../utils";
 
 export default function SessionDetail() {
-  const { botId = "", kind = "", scopeId = "" } = useParams();
+  const { botId = "", kind = "", scopeId = "", memberId = "" } = useParams();
   const nav = useNavigate();
   const { message } = AntdApp.useApp();
   const [detail, setDetail] = useState<ScopeDetail | null>(null);
@@ -18,7 +18,7 @@ export default function SessionDetail() {
     if (!botId || !kind || !scopeId) return;
     setLoading(true);
     try {
-      setDetail(await api.getScopeDetail(botId, kind, scopeId));
+      setDetail(await api.getScopeDetail(botId, kind, scopeId, memberId || undefined));
     } catch (e) {
       message.error((e as Error).message);
     } finally {
@@ -28,11 +28,11 @@ export default function SessionDetail() {
 
   useEffect(() => {
     load();
-  }, [botId, kind, scopeId]);
+  }, [botId, kind, scopeId, memberId]);
 
   const forceReap = async () => {
     try {
-      const r = await api.forceReap(botId, kind, scopeId);
+      const r = await api.forceReap(botId, kind, scopeId, memberId || undefined);
       message.success(r.ok ? "已回收" : "会话不存在");
       if (r.ok) nav("/sessions");
     } catch (e) {

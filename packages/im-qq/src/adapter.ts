@@ -263,6 +263,9 @@ export class QQAdapter implements ImAdapter {
 		const event: ImEvent = {
 			type: "interaction",
 			scope,
+			// 点击按钮的用户 openid：群聊用 group_member_openid，单聊用 user_openid。
+			// 上层据此路由到对应成员会话，resolve 其挂起的 ask_user。
+			senderId: data.group_member_openid ?? data.user_openid ?? "",
 			interactionId: data.id,
 			buttonData: data.data?.resolved?.button_data,
 			buttonId: data.data?.resolved?.button_id,

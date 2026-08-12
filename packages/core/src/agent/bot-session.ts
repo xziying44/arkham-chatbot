@@ -9,6 +9,7 @@ import {
 	type StreamFn,
 	uuidv7,
 	compact,
+	convertToLlm,
 	estimateContextTokens,
 	DEFAULT_COMPACTION_SETTINGS,
 	createCompactionSummaryMessage,
@@ -24,6 +25,7 @@ import { createSendMessageTool } from "../tools/send-message.ts";
 import type { PendingAskHolder } from "../tools/ask-user.ts";
 import { HistoryStore } from "../session/history.ts";
 import { MemoryFiles } from "../session/memory-files.ts";
+import type { TranscriptStore } from "../session/transcript-store.ts";
 import type { PromptLoader } from "../prompts/prompt-loader.ts";
 import type { ScopeKey } from "../identity/scope.ts";
 import { scopeKeyStr } from "../identity/scope.ts";
@@ -71,6 +73,12 @@ function isCompactionSummary(m: AgentMessage): boolean {
 	return typeof m === "object" && m !== null && (m as { role?: string }).role === "compactionSummary";
 }
 
+/**
+ * 连续失败后清空上下文自愈时，发给用户的提示。
+ * 让用户知道「上下文已重置、重新开始」，而不是无声无息丢历史。
+ */
+const HEAL_MESSAGE = "（连续几次没回上来，我已清空对话上下文重新开始。再说一次试试。）";
+
 /** 若消息是 compactionSummary，提取其 summary 文本；否则返回 undefined。 */
 function extractCompactionSummary(m: AgentMessage): string | undefined {
 	if (isCompactionSummary(m)) {
@@ -92,7 +100,18 @@ function extractCompactionSummary(m: AgentMessage): string | undefined {
 export interface BotSessionOptions {
 	readonly scope: ScopeKey;
 	readonly scopeName: string;
-	readonly scopeDir: string;
+	/**
+	 * 本会话 session.jsonl + workspace 所在的宿主机目录。
+	 * 群成员：`<groupDir>/members/<memberId>`；私聊：`<userDir>`。
+	 * HistoryStore 读 session.jsonl、写 history/ 归档都在这里。
+	 */
+	readonly sessionDir: string;
+	/**
+	 * 记忆目录的宿主机绝对路径。
+	 * 群成员：群级共享 `<groupDir>/memories`（所有成员读写同一份）；
+	 * 私聊：`<sessionDir>/workspace/memories`（自己的）。沙箱挂载保证 agent 在 workspace/memories 看到。
+	 */
+	readonly memoriesDir: string;
 	readonly model: Model<any>;
 	/** pi-ai 的 Models 注册表（会话压缩 compact() 用，替代 streamFn 之外的 LLM 调用）。 */
 	readonly models: Models;
@@ -101,6 +120,17 @@ export interface BotSessionOptions {
 	/** 思考程度: off/low/medium/high/max。控制 Agent 的 thinkingLevel。 */
 	readonly thinkingLevel?: string;
 	readonly persona?: string;
+	/**
+	 * 群聊：当前会话服务的群员 openid（每成员会话模型下填）。
+	 * 注入到 session_context，让 agent 知道这条会话是谁的。私聊 undefined。
+	 */
+	readonly memberId?: string;
+	/**
+	 * 群共享聊天记录（群成员会话才有；私聊 undefined）。
+	 * runPrompt 一轮结束后把机器人的新回复（assistant + toolResult）追加进去，
+	 * 让群里其他成员的智能体能查阅。入站 user 消息由 dispatcher 写入，不在本会话写。
+	 */
+	readonly transcript?: TranscriptStore;
 	/** 额外的自定义工具（在默认 bash/read/edit/write 之上）。 */
 	readonly extraTools?: AgentTool[];
 	/** 已加载的技能清单（filePath 已重写为沙箱内路径）。所有 scope 共享。 */
@@ -137,8 +167,21 @@ export class ChatBotSession {
 	private readonly tools: AgentTool[];
 	/** 激活时构建并缓存，供管理端只读查看。 */
 	private systemPromptCache: string | undefined;
+	/**
+	 * 会话上下文消息（系统提示词之后的「下一块」）：含 persona/群 id/成员 openid 等动态变量。
+	 * 经 transformContext 每轮注入到发给 LLM 的消息最前面——不进 state.messages（不污染
+	 * session.jsonl、不被压缩吞噬），对同一会话字节稳定 → 进消息缓存前缀。
+	 */
+	private sessionContextMsg: AgentMessage | undefined;
 	/** 本次 prompt run 中 agent 是否已通过 send_message 工具发送过消息。 */
 	private messageSentThisRun = false;
+	/**
+	 * 连续失败计数：每次回复失败（空回复/异常）+1，成功归零。
+	 * 达到 {@link MAX_CONSECUTIVE_FAILURES} 触发自愈——清空上下文重启，避免毒化死循环。
+	 */
+	private consecutiveFailures = 0;
+	/** 连续失败多少次后清空上下文自愈。3 = 容忍偶发抖动，超过即认定上下文已坏。 */
+	private static readonly MAX_CONSECUTIVE_FAILURES = 3;
 	/**
 	 * 上一次运行中压缩完成时 agent.state.messages 的长度。
 	 * 用于 transformContext 防止同一轮内重复压缩：只有 messages 又增长了
@@ -158,8 +201,8 @@ export class ChatBotSession {
 	constructor(opts: BotSessionOptions) {
 		this.opts = opts;
 		this.scope = opts.scope;
-		this.history = new HistoryStore(opts.scopeDir);
-		this.memoryFiles = new MemoryFiles(opts.scopeDir);
+		this.history = new HistoryStore(opts.sessionDir);
+		this.memoryFiles = new MemoryFiles(opts.memoriesDir);
 		// send_message 工具：agent 主动决定何时发消息（替代自动发送文字输出）。
 		const sendMessageTool = opts.onSendMessage
 			? [createSendMessageTool({
@@ -174,24 +217,54 @@ export class ChatBotSession {
 		this.tools = [...createDefaultTools(opts.env), ...sendMessageTool, ...(opts.extraTools ?? [])];
 	}
 
-	/** 激活：确保工作目录存在，读历史，构造 Agent。 */
+	/**
+	 * 激活：确保工作目录存在，读历史，构造 Agent。
+	 *
+	 * 高可用：首次激活若抛错（典型为 session.jsonl 损坏导致加载/构造异常），清空历史后
+	 * 重试一次——宁可丢历史也不要会话起不来。
+	 */
 	async activate(): Promise<void> {
-		await mkdir(join(this.opts.scopeDir, "workspace"), { recursive: true });
+		try {
+			await this.activateOnce();
+		} catch (e) {
+			console.warn(`[bot] activate 首次失败，清空历史重试: ${(e as Error).message} scope=${this.opts.scope.kind}:${this.opts.scope.id}`);
+			await this.history.save([]).catch(() => {});
+			this.consecutiveFailures = 0;
+			await this.activateOnce();
+		}
+	}
+
+	/** 激活的实际逻辑（可能抛错，由 activate 兜底重试）。 */
+	private async activateOnce(): Promise<void> {
+		await mkdir(join(this.opts.sessionDir, "workspace"), { recursive: true });
 		await this.memoryFiles.ensure();
 		// 检查「清除历史」标记：存在则本次不注入历史消息（session.jsonl 不删），然后消费标记。
 		const cleared = await this.consumeHistoryClearedFlag();
 		// 加载历史（若被标记清除则注入空）。会话续接靠 session.jsonl 里的消息
-		// （Step 2 接入后，含 compactionSummary 消息——压缩摘要作为对话历史的一部分）。
+		// （含 compactionSummary 消息——压缩摘要作为对话历史的一部分，由 convertToLlm
+		// 渲染成 <summary>...</summary> 注入上下文）。
 		const previousMessages = cleared ? [] : await this.history.load();
+		// 纯静态系统提示词：不含 persona/群 id 等变量 → 跨会话字节一致，命中 cache_control。
 		const systemPrompt = buildSystemPrompt(this.opts.promptLoader, {
-			scopeName: this.opts.scopeName,
 			scopeKind: this.opts.scope.kind,
-			persona: this.opts.persona,
 			// 所有 SKILL.md 全文预加载到 system prompt（省掉 load_skill 工具往返轮次）。
 			// 参考文件（references/*.md）agent 仍用 read 按需读。
 			skillsContent: this.opts.skills?.map((s) => ({ name: s.name, content: s.content })),
 		});
 		this.systemPromptCache = systemPrompt;
+		// 动态变量（persona/群 id/成员 openid）放系统提示词之后的「下一块」：包成一条 user
+		// 消息，transformContext 每轮注入到发给 LLM 的消息最前面。不进 state.messages。
+		const sessionContextText = this.opts.promptLoader.buildSessionContext({
+			scopeKind: this.opts.scope.kind,
+			scopeName: this.opts.scopeName,
+			persona: this.opts.persona,
+			memberId: this.opts.memberId,
+		});
+		this.sessionContextMsg = {
+			role: "user",
+			content: [{ type: "text", text: sessionContextText }],
+			timestamp: Date.now(),
+		};
 
 		this.agent = new Agent({
 			initialState: {
@@ -205,13 +278,20 @@ export class ChatBotSession {
 				thinkingLevel: (this.opts.thinkingLevel ?? "off") as ThinkingLevel,
 			},
 			streamFn: this.opts.streamFn,
+			// convertToLlm：把 compactionSummary 等自定义角色渲染成 <summary>...</summary>
+			// user 消息注入上下文。不传则用默认实现，会把 compactionSummary 直接 filter 掉
+			// （记忆续接失效）。这是记忆「存了取不出来」的根因修复。
+			convertToLlm,
 			// 显式启用并行工具调用（pi-agent-core 默认即 parallel，显式声明更清晰）。
-			// 让 agent 一轮里能并行调多个工具（如 load_skill + generate_image 同时），
-			// 把多工具任务的往返轮次压到最少。
+			// 让 agent 一轮里能并行调多个工具，把多工具任务的往返轮次压到最少。
 			toolExecution: "parallel",
 			// 运行中上下文超阈值时触发压缩，避免长会话撑爆 context。
 			// 压缩后直接 mutate agent.state.messages（持久化在 dispose 时由 history.save 落盘）。
-			transformContext: async (messages) => this.runtimeCompactIfNeeded(messages),
+			// 压缩完再把 sessionContextMsg 注入到本次 LLM 调用的消息最前面（不进 state.messages）。
+			transformContext: async (messages) => {
+				const compacted = await this.runtimeCompactIfNeeded(messages);
+				return this.sessionContextMsg ? [this.sessionContextMsg, ...compacted] : compacted;
+			},
 		});
 		// 群聊消息合并：steer 队列设为 "all"，drain 时把积攒的所有消息一次性注入。
 		this.agent.steeringMode = "all";
@@ -308,27 +388,101 @@ export class ChatBotSession {
 		} catch (error) {
 			const errMsg = error instanceof Error ? error.message : String(error);
 			console.error(`[bot] agent.prompt 失败: ${errMsg}`);
+			// 异常可能留下半截 assistant turn，回滚到本轮之前，避免毒化上下文。
+			this.agent.state.messages = this.agent.state.messages.slice(0, beforeLen);
+			// 异常也算一次失败：连续达阈值则清空上下文自愈。
+			if (await this.recordFailure()) return HEAL_MESSAGE;
 			return "服务器开小差了，请稍后再试。";
 		} finally {
 			unsubscribe();
 		}
-		// 增量落盘本轮新增消息（user + assistant + toolResult 等）。失败不阻断回复。
+		// 检测本轮是否「无有效输出」：agent 既没调 send_message，最终文字也为空。
+		// 典型成因——DeepSeek 的 anthropic 兼容端点不严格遵守 thinking 的 budget_tokens，
+		// 思考越界跑到 max_tokens，正文 0 token → stop=length, content=[]。这条空 assistant
+		// 消息一旦写进 session.jsonl，会毒化后续每一轮（带着坏上下文继续失败 → 死循环，整个群卡死）。
+		// 处理：回滚 agent 状态到本轮之前（不持久化坏的 turn），并给用户一句反馈（不静默）。
 		const after = this.agent.state.messages;
-		if (after.length > beforeLen) {
-			await this.history.appendAll(after.slice(beforeLen)).catch(() => {});
+		const newMessages = after.slice(beforeLen);
+		const failed = !this.messageSentThisRun && collector.text.trim() === "" && newMessages.length > 0;
+		if (failed) {
+			const stop = this.lastAssistantStopReason(after);
+			// 回滚：丢弃本轮新增的全部消息（坏 assistant + 相关 toolResult），让上下文保持干净。
+			this.agent.state.messages = after.slice(0, beforeLen);
+			console.warn(`[bot] 本轮无有效输出（lastStop=${stop ?? "?"}），回滚 ${newMessages.length} 条消息不写历史。scope=${this.opts.scope.kind}:${this.opts.scope.id}`);
+			// 计一次失败：连续达阈值则清空上下文自愈（避免毒化死循环）。
+			if (await this.recordFailure()) return HEAL_MESSAGE;
+		} else {
+			// 成功（有有效输出）→ 失败计数归零。
+			this.consecutiveFailures = 0;
+			// 增量落盘本轮新增消息（user + assistant + toolResult 等）。失败不阻断回复。
+			if (newMessages.length > 0) {
+				// 本成员自己的 session.jsonl（活动上下文）。
+				await this.history.appendAll(newMessages).catch(() => {});
+				// 群共享 transcript：只追加机器人的回复部分（assistant + toolResult）。
+				// 入站 user 消息由 dispatcher 单独写入（那里对每条群消息都写，含 steer 的情况），
+				// 这里若再写 user 会导致 transcript 里 user 消息重复。
+				if (this.opts.transcript) {
+					const botOnly = newMessages.filter(
+						(m) => (m as { role?: string }).role !== "user",
+					);
+					if (botOnly.length > 0) {
+						await this.opts.transcript.append(botOnly).catch(() => {});
+					}
+				}
+			}
 		}
 		// 有 send_message 工具且 agent 已通过工具发送了消息 → 返回空（router 不重复发）。
-		// agent 没调 send_message（漏了）→ 用最终文字兜底。
 		if (hasSendTool && this.messageSentThisRun) return "";
+		// 本轮失败（空回复/出错）→ 给用户一句反馈，避免群里看起来毫无响应（「没反应」的体感）。
+		if (failed) return "（刚刚那条我没回上来，再说一次试试）";
+		// agent 没调 send_message（漏了）→ 用最终文字兜底。
 		return collector.text;
+	}
+
+	/**
+	 * 记一次失败。连续达 {@link MAX_CONSECUTIVE_FAILURES} 则清空上下文自愈。
+	 * @returns true 表示已触发自愈（调用方应返回自愈提示，而非普通失败提示）。
+	 */
+	private async recordFailure(): Promise<boolean> {
+		this.consecutiveFailures++;
+		if (this.consecutiveFailures >= ChatBotSession.MAX_CONSECUTIVE_FAILURES) {
+			await this.resetContext();
+			this.consecutiveFailures = 0;
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * 清空上下文自愈：丢掉 agent 内存里的全部消息 + 清空 session.jsonl。
+	 *
+	 * 触发条件：连续多次回复失败（毒化上下文死循环）。群共享 transcript 不动（其他成员还要看），
+	 * compactionSummary 也一起丢——自愈场景下宁可丢长期记忆也要恢复可用，用户可以重新告知要点。
+	 * sessionContextMsg（persona/群 id/成员 openid）不受影响（它本就不在 state.messages 里，
+	 * 由 transformContext 每轮重新注入）——所以重置后 agent 仍知道自己在哪个群、服务谁。
+	 */
+	private async resetContext(): Promise<void> {
+		const had = this.agent?.state?.messages?.length ?? 0;
+		if (this.agent) this.agent.state.messages = [];
+		await this.history.save([]).catch(() => {});
+		console.warn(`[bot] 自愈：清空上下文（丢弃 ${had} 条消息 + session.jsonl）。scope=${this.opts.scope.kind}:${this.opts.scope.id}`);
+	}
+
+	/** 取消息列表中最后一条 assistant 的 stopReason（仅供失败诊断/日志）。 */
+	private lastAssistantStopReason(messages: AgentMessage[]): string | undefined {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const m = messages[i] as { role?: string; stopReason?: string };
+			if (m.role === "assistant") return m.stopReason;
+		}
+		return undefined;
 	}
 
 	/**
 	 * 回收：压缩历史 → 落盘 [compactionSummary, ...retainedTail] → 按天归档 → 释放 Agent。
 	 *
 	 * 用 pi-agent-core 的 compact() 把当前会话消息压缩成一份摘要 + 保留最近若干条原文。
-	 * 下次激活时 session.jsonl 里的 compactionSummary 消息会被 Agent 的 convertToLlm
-	 * 自动渲染成「<summary>...</summary>」注入上下文，实现无缝续接 + 低 token 开销。
+	 * 下次激活时 session.jsonl 里的 compactionSummary 消息会经 convertToLlm（构造 Agent 时
+	 * 显式传入）渲染成「<summary>...</summary>」user 消息注入上下文，实现无缝续接 + 低 token 开销。
 	 *
 	 * 增量压缩：若 session.jsonl 里已有 compactionSummary（前次压缩的结果），会作为
 	 * previousSummary 传入 compact()，让新摘要并入旧摘要而非从零重写。
@@ -481,7 +635,7 @@ export class ChatBotSession {
 
 	/** 「清除历史」标记文件路径（沙箱外，agent 看不到也改不了）。 */
 	private get historyClearedFlagPath(): string {
-		return join(this.opts.scopeDir, ".history_cleared");
+		return join(this.opts.sessionDir, ".history_cleared");
 	}
 
 	/**

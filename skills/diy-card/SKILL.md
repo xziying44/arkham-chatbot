@@ -29,6 +29,10 @@ inbox/        ← 用户发来的图片
 skills/       ← 技能源文件（只读）
 ```
 
+> **群聊**：`cards/` 和 `generated/` 是**全群共享**的卡牌库与插画库（所有成员读写同一份）。
+> 里面也含群里其他人历史制卡的 .card 和插画。要重发某张历史卡，直接 `send_card(filePath="cards/in/NNN.card")`，
+> 不用重新 render。私聊则是你自己专属的，不与他人共享。
+
 ## 渲染说明
 渲染通过 `render_card` 工具完成——传 JSON 内容，工具自动写文件 + 调 arkham-cli 渲染。你不需要手动跑 bash render。
 
@@ -79,7 +83,7 @@ skills/       ← 技能源文件（只读）
 需要我把可编辑的 .card 源文件也发给你吗？要用编辑器自己改的话说一声。
 ```
 
-用户要 .card 源文件 → 调 `send_card(cardJson=...)`，把 .card JSON 直接传入（工具自动写文件并发送，不用先 write）。
+用户要 .card 源文件 → 调 `send_card(cardJson=..., picturePath=...)`。**必须带 picturePath**（用 Step 2 render_card 渲染时的同一插画路径，如 `generated/art-xxx-1.jpg`），否则发出去的 .card 不含 `picture_base64`、对方在编辑器里打开看不到图。工具自动写文件（文件名按时间戳，不覆盖历史卡）并发送，不用先 write。
 
 ---
 

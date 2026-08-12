@@ -34,12 +34,13 @@ export function createMessageRouter(opts: MessageRouterOptions) {
 			adapter.replyInteraction?.(event.interactionId, 0).catch((e) => {
 				logger?.warn("应答交互事件失败", { interactionId: event.interactionId, error: (e as Error).message });
 			});
-			// resolve 对应 scope 的挂起提问（用户点了按钮 → 选择完成）。
+			// resolve 对应成员会话的挂起提问（用户点了按钮 → 选择完成）。
+			// 传 senderId 作为 memberId：群聊路由到点击者的成员会话。
 			sessions.dispatchInteraction(event.scope, {
 				interactionId: event.interactionId,
 				buttonData: event.buttonData,
 				buttonId: event.buttonId,
-			});
+			}, event.senderId);
 			return;
 		}
 		if (event.type !== "message") return;

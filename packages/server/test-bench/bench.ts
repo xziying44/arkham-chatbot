@@ -195,8 +195,8 @@ const promptLoader = new PromptLoader(resolve("prompts"));
 await promptLoader.load();
 
 const systemPrompt = buildSystemPrompt(promptLoader, {
-  scopeName: "benchmark", scopeKind: "user",
-  skillsBlock: formatSkillsForSystemPrompt(skills),
+  scopeKind: "user",
+  skillsContent: skills.map((s) => ({ name: s.name, content: s.content })),
 });
 
 const { models, model } = buildModel();

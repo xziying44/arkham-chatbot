@@ -38,14 +38,16 @@ export default function Sessions() {
 
   const openDetail = (scope: ActiveScope) => {
     if (!botId) return;
-    nav(`/sessions/${botId}/${scope.scope.kind}/${scope.scope.id}`);
+    // 群成员会话带 memberId 进详情路由，定位到具体成员。
+    const tail = scope.memberId ? `/${scope.memberId}` : "";
+    nav(`/sessions/${botId}/${scope.scope.kind}/${scope.scope.id}${tail}`);
   };
 
   const forceReap = async (e: React.MouseEvent, scope: ActiveScope) => {
     e.stopPropagation();
     if (!botId) return;
     try {
-      const r = await api.forceReap(botId, scope.scope.kind, scope.scope.id);
+      const r = await api.forceReap(botId, scope.scope.kind, scope.scope.id, scope.memberId);
       message.success(r.ok ? "已回收" : "会话不存在");
       load();
     } catch (err) {
@@ -77,6 +79,7 @@ export default function Sessions() {
         columns={[
           { title: "类型", dataIndex: ["scope", "kind"], width: 80, render: (k: string) => <Tag color={k === "group" ? "blue" : "green"}>{k === "group" ? "群" : "私聊"}</Tag> },
           { title: "Scope ID", dataIndex: ["scope", "id"], ellipsis: true },
+          { title: "成员", dataIndex: "memberId", width: 140, ellipsis: true, render: (m?: string) => m ?? "—" },
           { title: "最后活动", dataIndex: "lastActivityAt", width: 180, render: fmtTime },
           { title: "TTL 剩余", dataIndex: "ttlRemainingMs", width: 100, render: fmtDuration },
           { title: "消息数", dataIndex: "messageCount", width: 80 },

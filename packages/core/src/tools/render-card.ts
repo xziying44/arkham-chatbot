@@ -4,6 +4,7 @@ import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { validateCard, hasCardErrors, formatCardErrors } from "./validate-card.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -63,6 +64,12 @@ export function createRenderCardTool(opts: CreateRenderCardToolOptions): AgentTo
 					cardData = JSON.parse(cardJson);
 				} catch {
 					return { content: [{ type: "text", text: "错误：cardJson 不是有效的 JSON" }], details: undefined };
+				}
+
+				// 校验：有 error 则拦截，不渲染（省一次无效渲染 + 强制 agent 修正字段名/枚举/语法错误）。
+				const issues = validateCard(cardData);
+				if (hasCardErrors(issues)) {
+					return { content: [{ type: "text", text: formatCardErrors(issues) }], details: undefined };
 				}
 
 				// 如果给了 picturePath，读图片转 base64 嵌入 picture_base64 字段

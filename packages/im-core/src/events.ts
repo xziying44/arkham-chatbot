@@ -48,6 +48,8 @@ export interface ImInteractionEvent {
 	readonly type: "interaction";
 	/** 归一化的会话作用域（按钮所在消息所属的会话）。 */
 	readonly scope: ScopeKey;
+	/** 点击按钮的用户稳定 ID（群聊为群员 openid，私聊为用户 openid）。用于路由到对应成员会话。 */
+	readonly senderId: string;
 	/** 交互事件 ID（用于应答平台，如 QQ 的 PUT /interactions/{id}）。 */
 	readonly interactionId: string;
 	/** 按钮回调数据（发送按钮时设的 action.data）。 */

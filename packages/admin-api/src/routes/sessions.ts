@@ -19,28 +19,30 @@ export function createSessionsRoutes(deps: SessionRoutesDeps): Hono {
 		return c.json({ items: inst.sessions.listActiveScopes() });
 	});
 
-	// 会话详情：systemPrompt + 工具 + 最近消息。
+	// 会话详情：systemPrompt + 工具 + 最近消息。群聊需带 ?memberId= 定位成员会话。
 	app.get("/:id/sessions/:kind/:scopeId", (c) => {
 		const id = c.req.param("id");
 		const kind = c.req.param("kind");
 		const scopeId = c.req.param("scopeId");
+		const memberId = c.req.query("memberId") || undefined;
 		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
 		const inst = botManager.get(id);
 		if (!inst) return c.json({ error: "机器人未加载或不存在" }, 404);
-		const detail = inst.sessions.getScopeDetail({ kind, id: scopeId });
+		const detail = inst.sessions.getScopeDetail({ kind, id: scopeId }, memberId);
 		if (!detail) return c.json({ error: "会话不在活跃池中" }, 404);
 		return c.json(detail);
 	});
 
-	// 强制回收一个会话。
+	// 强制回收一个会话。群聊需带 ?memberId= 定位成员会话。
 	app.delete("/:id/sessions/:kind/:scopeId", async (c) => {
 		const id = c.req.param("id");
 		const kind = c.req.param("kind");
 		const scopeId = c.req.param("scopeId");
+		const memberId = c.req.query("memberId") || undefined;
 		if (kind !== "group" && kind !== "user") return c.json({ error: "kind 必须是 group 或 user" }, 400);
 		const inst = botManager.get(id);
 		if (!inst) return c.json({ error: "机器人未加载或不存在" }, 404);
-		const ok = await inst.sessions.forceReap({ kind, id: scopeId });
+		const ok = await inst.sessions.forceReap({ kind, id: scopeId }, memberId);
 		return c.json({ ok });
 	});
 

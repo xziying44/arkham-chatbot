@@ -20,6 +20,8 @@ export interface Bot {
 export interface ActiveScope {
   key: string;
   scope: { kind: "group" | "user"; id: string };
+  /** 群成员会话的成员 openid（私聊 undefined）。 */
+  memberId?: string;
   lastActivityAt: number;
   ttlRemainingMs: number;
   messageCount: number;
@@ -27,6 +29,7 @@ export interface ActiveScope {
 
 export interface ScopeDetail {
   scope: { kind: "group" | "user"; id: string };
+  memberId?: string;
   systemPrompt: string;
   tools: { name: string; description: string }[];
   messages: AgentMessage[];

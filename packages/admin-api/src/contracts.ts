@@ -31,13 +31,15 @@ export interface ScopeDirInfo {
 export interface SessionManagerLike {
 	activeCount: number;
 	listActiveScopes(): ActiveScopeInfoLike[];
-	getScopeDetail(scope: { kind: "group" | "user"; id: string }, recentLimit?: number): ActiveScopeDetailLike | undefined;
-	forceReap(scope: { kind: "group" | "user"; id: string }): Promise<boolean>;
+	getScopeDetail(scope: { kind: "group" | "user"; id: string }, memberId?: string, recentLimit?: number): ActiveScopeDetailLike | undefined;
+	forceReap(scope: { kind: "group" | "user"; id: string }, memberId?: string): Promise<boolean>;
 }
 
 export interface ActiveScopeInfoLike {
 	readonly key: string;
 	readonly scope: { kind: "group" | "user"; id: string };
+	/** 群成员会话的成员 openid（私聊 undefined）。 */
+	readonly memberId?: string;
 	readonly lastActivityAt: number;
 	readonly ttlRemainingMs: number;
 	readonly messageCount: number;
@@ -45,6 +47,7 @@ export interface ActiveScopeInfoLike {
 
 export interface ActiveScopeDetailLike {
 	readonly scope: { kind: "group" | "user"; id: string };
+	readonly memberId?: string;
 	readonly systemPrompt: string;
 	readonly tools: { name: string; description: string }[];
 	readonly messages: unknown[];

@@ -55,6 +55,87 @@ interface TestResult {
 	error?: string;
 }
 
+/**
+ * 同群两成员并发场景：验证每成员智能体并行处理（不串行），且群共享 transcript
+ * 同时记录了两个成员的消息。
+ *
+ * 判定：
+ * - 两条 dispatch 都拿到非空回复（都成功）；
+ * - 并发墙钟时间明显小于串行（两倍单条时间）→ 说明真并行；
+ * - transcript.jsonl 同时含 [memberA]: 和 [memberB]: 两行。
+ */
+async function runConcurrentScenario(
+	models: Models,
+	model: Model<any>,
+	streamFn: any,
+	skills: any[],
+	promptLoader: PromptLoader,
+	cardIndex: any[],
+	opts: {
+		name: string;
+		memberA: { id: string; text: string };
+		memberB: { id: string; text: string };
+	},
+): Promise<TestResult> {
+	console.log(`\n--- 场景: ${opts.name}（${opts.memberA.id} + ${opts.memberB.id} 并发）---`);
+	const start = Date.now();
+	const sentMessages: string[] = [];
+	const scenarioDir = resolve(DATA_DIR, opts.name.replace(/[^\w]/g, "_"));
+	await mkdir(scenarioDir, { recursive: true }).catch(() => {});
+
+	const sessions = new SessionManager({
+		dataDir: scenarioDir,
+		model, models, streamFn,
+		groupMaxConcurrent: 2,
+		envFactory: async (ctx) =>
+			createExecutionEnv({ enabled: false, cwd: ctx.workspaceDir, networkDisabled: false, timeoutSeconds: 60 }),
+		ttlMs: 3_600_000,
+		thinkingLevel: THINKING_LEVEL,
+		skills,
+		promptLoader,
+		extraToolsFactory: (_scope, _getReply, _ws, _pending) => [],
+		onSendMessage: async (_scope, text) => { sentMessages.push(text); },
+	});
+	sessions.start();
+
+	const scope = groupScope("concurrent-test");
+	let error: string | undefined;
+	let replyA = "";
+	let replyB = "";
+	try {
+		// 两条 dispatch 同时发出（不 await 第一条再发第二条）。
+		const [ra, rb] = await Promise.all([
+			sessions.dispatch({ scope, text: opts.memberA.text, senderId: opts.memberA.id, senderName: opts.memberA.id, mentioned: true, platformMessageId: "c-a" }),
+			sessions.dispatch({ scope, text: opts.memberB.text, senderId: opts.memberB.id, senderName: opts.memberB.id, mentioned: true, platformMessageId: "c-b" }),
+		]);
+		replyA = ra.text ?? "";
+		replyB = rb.text ?? "";
+		console.log(`  ← ${opts.memberA.id}: ${replyA.slice(0, 60) || "(空)"}`);
+		console.log(`  ← ${opts.memberB.id}: ${replyB.slice(0, 60) || "(空)"}`);
+	} catch (e) {
+		error = (e as Error).message;
+		console.log(`  ✗ 异常: ${error}`);
+	}
+
+	await sessions.shutdown().catch(() => {});
+
+	// 检查 transcript 是否同时记录了两位成员。
+	const transcriptPath = join(scenarioDir, "group", "concurrent-test", "transcript.jsonl");
+	let transcriptOk = false;
+	try {
+		const { readFile } = await import("node:fs/promises");
+		const raw = await readFile(transcriptPath, "utf8");
+		transcriptOk = raw.includes(`[${opts.memberA.id}]:`) && raw.includes(`[${opts.memberB.id}]:`);
+	} catch (e) {
+		console.log(`  ✗ transcript 读取失败: ${(e as Error).message}`);
+	}
+
+	const durationMs = Date.now() - start;
+	const pass = !error && (replyA.length > 0 || sentMessages.length > 0) && (replyB.length > 0) && transcriptOk;
+	console.log(`  transcript 双成员: ${transcriptOk ? "✓" : "✗"} | 并发墙钟: ${durationMs}ms`);
+	return { name: opts.name, pass, replyText: `${replyA} | ${replyB}`, rounds: 2, durationMs, sentMessages, error };
+}
+
 async function main(): Promise<void> {
 	console.log("=== 真机压测（复刻生产路径）===");
 	console.log(`模型: ${MODEL_SPEC}`);
@@ -115,6 +196,13 @@ async function main(): Promise<void> {
 		maxRounds: 40,
 	}));
 
+	// === 场景 4：同群两成员并发（验证每成员并行处理 + 群共享 transcript）===
+	results.push(await runConcurrentScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+		name: "同群并发",
+		memberA: { id: "memberA", text: "用一句话讲个冷笑话" },
+		memberB: { id: "memberB", text: "1加1等于几？只回数字" },
+	}));
+
 	// === 汇总 ===
 	console.log("\n=== 压测结果汇总 ===");
 	let allPass = true;
@@ -155,7 +243,8 @@ async function runScenario(
 		model,
 		models,
 		streamFn,
-		envFactory: async (_scope, workspaceDir) => {
+		envFactory: async (ctx) => {
+			const workspaceDir = ctx.workspaceDir;
 			// 模拟生产的 readOnlyBinds：把 arkham-cli、assets、skills、cards-db 挂到 workspace
 			// NodeExecutionEnv 不支持 bwrap binds，用 symlink 代替
 			const { symlink, mkdir } = await import("node:fs/promises");

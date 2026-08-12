@@ -40,8 +40,8 @@ async function main(): Promise<void> {
 		model: model as Model<any>,
 		models,
 		streamFn: models.streamSimple.bind(models),
-		envFactory: async (_scope, workspaceDir) =>
-			createExecutionEnv({ enabled: false, cwd: workspaceDir, networkDisabled: false }),
+		envFactory: async (ctx) =>
+			createExecutionEnv({ enabled: false, cwd: ctx.workspaceDir, networkDisabled: false }),
 		ttlMs: 3_600_000,
 	});
 	sessions.start();

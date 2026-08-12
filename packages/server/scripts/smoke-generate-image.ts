@@ -66,10 +66,10 @@ async function main(): Promise<void> {
 		model: model as Model<any>,
 		models,
 		streamFn: models.streamSimple.bind(models),
-		envFactory: async (_scope, wsDir) =>
+		envFactory: async (ctx) =>
 			createExecutionEnv({
 				enabled: false, // 冒烟不测沙箱本身
-				cwd: wsDir,
+				cwd: ctx.workspaceDir,
 				networkDisabled: false,
 				timeoutSeconds: 60,
 				readOnlyBinds: [[skillsDir, "skills"], ...workshopBinds],

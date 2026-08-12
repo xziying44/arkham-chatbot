@@ -37,6 +37,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="bots" element={<Bots />} />
               <Route path="sessions" element={<Sessions />} />
               <Route path="sessions/:botId/:kind/:scopeId" element={<SessionDetail />} />
+              <Route path="sessions/:botId/:kind/:scopeId/:memberId" element={<SessionDetail />} />
               <Route path="messages" element={<Messages />} />
               <Route path="logs" element={<Logs />} />
               <Route path="memories" element={<Memories />} />

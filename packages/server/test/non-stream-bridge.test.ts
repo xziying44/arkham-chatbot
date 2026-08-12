@@ -83,6 +83,10 @@ test("Anthropic 兼容端点转换完整上下文并返回思考和文本", asyn
 		assert.equal(body.temperature, 0.2);
 		assert.deepEqual(body.thinking, { type: "disabled" });
 		assert.ok(!("stream" in body));
+		// system 用数组形式携带 cache_control（纯字符串形式带不了断点）。
+		assert.deepEqual(body.system, [
+			{ type: "text", text: "测试系统提示词", cache_control: { type: "ephemeral" } },
+		]);
 		assert.deepEqual(body.messages, [
 			{ role: "user", content: "查一下" },
 			{
@@ -95,7 +99,8 @@ test("Anthropic 兼容端点转换完整上下文并返回思考和文本", asyn
 			},
 			{
 				role: "user",
-				content: [{ type: "tool_result", tool_use_id: "call-old", content: "晴天" }],
+				// 最后一条 user 消息的最后一个 block 打 cache_control 断点（消息前缀稳定 → 跨轮命中）
+				content: [{ type: "tool_result", tool_use_id: "call-old", content: "晴天", cache_control: { type: "ephemeral" } }],
 			},
 		]);
 		assert.deepEqual(body.tools, [{
@@ -106,6 +111,8 @@ test("Anthropic 兼容端点转换完整上下文并返回思考和文本", asyn
 				properties: { keyword: { type: "string" } },
 				required: ["keyword"],
 			},
+			// 最后一个 tool 打 cache_control 断点（tools 段稳定 → 跨轮命中）
+			cache_control: { type: "ephemeral" },
 		}]);
 		return Response.json({
 			id: "response-1",
@@ -376,6 +383,30 @@ test("非成功响应产生 error 事件并结束结果流", async (t) => {
 
 	assert.deepEqual(events.map((event) => event.type), ["error"]);
 	assert.equal(result.stopReason, "error");
+});
+
+test("cacheRetention:none 时不打 cache_control 断点（system 为纯字符串）", async (t) => {
+	t.mock.method(globalThis, "fetch", async (_input, init) => {
+		const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+		// none → system 回到纯字符串，无 cache_control；tools/消息也不带断点。
+		assert.equal(body.system, "测试系统提示词");
+		assert.equal((body.tools as Array<Record<string, unknown>>)?.[0]?.cache_control, undefined);
+		return Response.json({
+			id: "r",
+			model: "deepseek-v4-flash",
+			content: [{ type: "text", text: "ok" }],
+			stop_reason: "end_turn",
+			usage: { input_tokens: 1, output_tokens: 1 },
+		});
+	});
+
+	const stream = createNonStreamStreamFn(unusedOriginal())(anthropicModel, context, {
+		apiKey: "test-key",
+		cacheRetention: "none",
+	});
+	const events = await collect(stream);
+	await stream.result();
+	assert.deepEqual(events.map((event) => event.type), ["start", "text_start", "text_delta", "text_end", "done"]);
 });
 
 test("其它 API 保持使用原始流函数", () => {

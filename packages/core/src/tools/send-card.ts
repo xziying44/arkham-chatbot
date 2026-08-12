@@ -2,6 +2,7 @@ import { type Static, Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { realpath, stat } from "node:fs/promises";
 import { resolve, join, sep } from "node:path";
+import { validateCard, hasCardErrors, formatCardErrors } from "./validate-card.ts";
 
 /**
  * 发 .card 卡牌源文件能力：由上层（server）注入具体实现，避免 core 依赖具体 IM。
@@ -12,7 +13,9 @@ export type CardSender = (scopeId: string, filePath: string, replyToMsgId?: stri
 
 const sendCardSchema = Type.Object({
 	filePath: Type.Optional(Type.String({ description: "已有的 .card 文件路径（工作目录内，如 cards/in/000.card）。与 cardJson 二选一。" })),
-	cardJson: Type.Optional(Type.String({ description: ".card 的 JSON 内容字符串。传入后工具自动写文件到 cards/in/ 再发送（不用先 write）。与 filePath 二选一。" })),
+	cardJson: Type.Optional(Type.String({ description: ".card 的 JSON 内容字符串。传入后工具自动写文件到 cards/in/ 再发送（不用先 write）。与 filePath 二选一。注意：发出去的 .card 想自带插画必须同时传 picturePath，否则文件里没有 picture_base64（对方打开看不到图）。" })),
+	picturePath: Type.Optional(Type.String({ description: "插画图片路径（同 render_card 的 picturePath，如 generated/art-xxx-1.jpg）。仅 cardJson 模式生效：读图转 base64 嵌入 picture_base64，让发出去的 .card 自带插画。省略则 .card 不含图。" })),
+	filename: Type.Optional(Type.String({ description: "写入的文件名（不带扩展名）。默认按时间戳生成，避免覆盖已有卡片（每次都写 000.card 会覆盖历史卡）。仅 cardJson 模式生效。" })),
 });
 
 export type SendCardInput = Static<typeof sendCardSchema>;
@@ -44,22 +47,43 @@ export function createSendCardTool(opts: CreateSendCardToolOptions): AgentTool<t
 			"把 .card 卡牌源文件发送给用户编辑。两种方式：① 传 cardJson（JSON 内容字符串），工具自动写文件再发；② 传 filePath（已有文件路径）。用户拿到后可在编辑器里改。当用户想要 .card 源文件时调用。",
 		parameters: sendCardSchema,
 		async execute(_toolCallId, params, _signal, _onUpdate) {
-			const { filePath, cardJson } = params;
+			const { filePath, cardJson, picturePath, filename } = params;
 
 			// cardJson 模式：工具内部写文件再发（agent 不用先 write）。
 			if (cardJson !== undefined) {
 				if (opts.workspaceDir) {
 					const inDir = join(opts.workspaceDir, "cards", "in");
-					const writePath = join(inDir, "000.card");
 					try {
-						const { mkdir: mkd, writeFile: wf } = await import("node:fs/promises");
+						const { mkdir: mkd, writeFile: wf, readFile: rf } = await import("node:fs/promises");
 						await mkd(inDir, { recursive: true });
 						// 校验是合法 JSON
 						let parsed: unknown;
 						try { parsed = JSON.parse(cardJson); } catch { return { content: [{ type: "text", text: "错误：cardJson 不是有效的 JSON" }], details: undefined }; }
-						await wf(writePath, JSON.stringify(parsed, null, 2), "utf8");
+						// 校验字段名/枚举/语法：有 error 不发送（避免发出字段错误的 .card）
+						const issues = validateCard(parsed);
+						if (hasCardErrors(issues)) {
+							return { content: [{ type: "text", text: formatCardErrors(issues) }], details: undefined };
+						}
+						const cardData = parsed as Record<string, unknown>;
+						// 若给 picturePath，读图嵌 base64（修复「发源文件没插画」——与 render_card 同一逻辑）
+						if (picturePath) {
+							const absPicturePath = picturePath.startsWith("/") ? picturePath : join(opts.workspaceDir, picturePath);
+							try {
+								const imgBuffer = await rf(absPicturePath);
+								const base64 = imgBuffer.toString("base64");
+								const ext = absPicturePath.toLowerCase().endsWith(".png") ? "png" : "jpeg";
+								cardData["picture_base64"] = `data:image/${ext};base64,${base64}`;
+								delete cardData["picture_path"];
+							} catch {
+								return { content: [{ type: "text", text: `错误：读取插画失败 ${picturePath}（文件不存在或路径不对）` }], details: undefined };
+							}
+						}
+						// 文件名：默认时间戳后6位，避免每次覆盖 000.card（历史卡被覆盖丢失的根因之一）
+						const fname = (filename ?? String(Date.now()).slice(-6)).replace(/[^0-9a-zA-Z_-]/g, "").slice(0, 8) || String(Date.now()).slice(-6);
+						const writePath = join(inDir, `${fname}.card`);
+						await wf(writePath, JSON.stringify(cardData, null, 2), "utf8");
 						await opts.send(opts.scopeId, writePath, opts.getReplyToMsgId?.());
-						return { content: [{ type: "text", text: `已写入并发送 .card 源文件：${writePath}` }], details: undefined };
+						return { content: [{ type: "text", text: `已写入并发送 .card 源文件：${writePath}${picturePath ? "（含插画）" : "（未传 picturePath，不含插画）"}` }], details: undefined };
 					} catch (error) {
 						return { content: [{ type: "text", text: `发送失败：${(error as Error).message}` }], details: undefined };
 					}

@@ -62,10 +62,14 @@ export const api = {
   // sessions
   listSessions: (botId: string) =>
     request<{ items: import("./types").ActiveScope[] }>(`/api/bots/${botId}/sessions`),
-  getScopeDetail: (botId: string, kind: string, scopeId: string) =>
-    request<import("./types").ScopeDetail>(`/api/bots/${botId}/sessions/${kind}/${scopeId}`),
-  forceReap: (botId: string, kind: string, scopeId: string) =>
-    request<{ ok: boolean }>(`/api/bots/${botId}/sessions/${kind}/${scopeId}`, { method: "DELETE" }),
+  getScopeDetail: (botId: string, kind: string, scopeId: string, memberId?: string) => {
+    const qs = memberId ? `?memberId=${encodeURIComponent(memberId)}` : "";
+    return request<import("./types").ScopeDetail>(`/api/bots/${botId}/sessions/${kind}/${scopeId}${qs}`);
+  },
+  forceReap: (botId: string, kind: string, scopeId: string, memberId?: string) => {
+    const qs = memberId ? `?memberId=${encodeURIComponent(memberId)}` : "";
+    return request<{ ok: boolean }>(`/api/bots/${botId}/sessions/${kind}/${scopeId}${qs}`, { method: "DELETE" });
+  },
 
   // memories（审计）
   listScopes: (botId: string) =>
