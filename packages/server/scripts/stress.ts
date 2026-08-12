@@ -55,6 +55,8 @@ interface TestResult {
 	error?: string;
 	/** render_card 写入的 .card 的 body 字段（用于校验正文翻译，如「花费两个行动」→➡️➡️）。 */
 	cardBody?: string;
+	/** .card 是否含 picture_base64（校验插画嵌入）。 */
+	cardHasImage?: boolean;
 }
 
 /**
@@ -174,9 +176,10 @@ async function main(): Promise<void> {
 	const cardIndex = CARD_DB_DIR ? await loadCardIndex(CARD_DB_DIR, "cards-db").catch(() => []) : [];
 
 	const results: TestResult[] = [];
-	const ONLY = process.env.STRESS_ONLY; // 设置时只跑 name 含此值的场景（如 STRESS_ONLY=双行动）
-	const should = (name: string) => !ONLY || name.includes(ONLY);
-	if (ONLY) console.log(`>> 只跑 name 含「${ONLY}」的场景`);
+	const ONLY = process.env.STRESS_ONLY; // 只跑 name 含任一关键词的场景（逗号分隔，如 STRESS_ONLY=双行动,做账,贿赂）
+	const onlyKeys = ONLY ? ONLY.split(",").map((s) => s.trim()).filter(Boolean) : [];
+	const should = (name: string) => onlyKeys.length === 0 || onlyKeys.some((k) => name.includes(k));
+	if (ONLY) console.log(`>> 只跑 name 含 [${onlyKeys.join(", ")}] 的场景`);
 
 	// === 场景 1：闲聊 ===
 	if (should("闲聊")) results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
@@ -216,6 +219,22 @@ async function main(): Promise<void> {
 		maxRounds: 40,
 	}));
 
+	// === 场景 6：做账（群员真实指令，含「行动行动」=双行动 + body 多行 + 1书图标）===
+	if (should("做账")) results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+		name: "做账",
+		messages: ["我要d一张卡 做账 0块流浪者0事件 1书 违法 查找你的绑定卡牌，找出1张查税，将其洗入你的牌库。然后，你获得6资源。将做账放置入场，放到你的游戏区域。行动行动：弃掉做账。"],
+		expectSend: true,
+		maxRounds: 40,
+	}));
+
+	// === 场景 7：贿赂（A 档规范输入，验证不乱改用户正文 + submit_icon「书」→智力）===
+	if (should("贿赂")) results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+		name: "贿赂",
+		messages: ["做一张绿家事件卡，名称为贿赂，费用为0，等级为3，投入图标为一个书。效果为：作为打出贿赂的额外费用，花费任意点资源，每因此花费1资源，本次谈判检定难度-1。"],
+		expectSend: true,
+		maxRounds: 40,
+	}));
+
 	// === 汇总 ===
 	console.log("\n=== 压测结果汇总 ===");
 	let allPass = true;
@@ -223,6 +242,7 @@ async function main(): Promise<void> {
 		const status = r.pass ? "✅ PASS" : "❌ FAIL";
 		console.log(`${status} ${r.name} | ${r.durationMs}ms | ${r.rounds}轮 | send:${r.sentMessages.length}条`);
 		if (r.cardBody) console.log(`  body: ${r.cardBody}`);
+		if (r.cardHasImage !== undefined) console.log(`  含插画: ${r.cardHasImage ? "✅" : "❌"}`);
 		if (!r.pass) {
 			allPass = false;
 			console.log(`  原因: ${r.error ?? "回复为空"}`);
@@ -341,24 +361,32 @@ async function runScenario(
 
 	await sessions.shutdown().catch(() => {});
 
-	// 读取 render_card 写入的 .card body（校验正文翻译：如「花费两个行动」是否翻成 ➡️➡️）
+	// 读取 render_card 写入的 .card：校验正文翻译（body）+ 插画嵌入（picture_base64）
 	let cardBody: string | undefined;
+	let cardHasImage = false;
 	try {
-		const cardDir = join(scenarioDir, "group", "stress-test", "cards", "in");
-		const files = await readdir(cardDir);
-		for (const f of files) {
-			if (f.endsWith(".card")) {
-				const data = JSON.parse(await readFile(join(cardDir, f), "utf8")) as { body?: string };
-				if (typeof data.body === "string") cardBody = data.body;
+		// stress 沙箱没 bind 群共享 cards（和生产差异），.card 在成员私有 workspace；群共享路径作 fallback
+		const candidates = [
+			join(scenarioDir, "group", "stress-test", "members", "tester", "workspace", "cards", "in"),
+			join(scenarioDir, "group", "stress-test", "cards", "in"),
+		];
+		for (const cardDir of candidates) {
+			const files = await readdir(cardDir).catch(() => []);
+			for (const f of files) {
+				if (!f.endsWith(".card")) continue;
+				const data = JSON.parse(await readFile(join(cardDir, f), "utf8")) as { body?: string; picture_base64?: string };
+				if (typeof data.body === "string" && !cardBody) cardBody = data.body;
+				if (typeof data.picture_base64 === "string" && data.picture_base64.length > 0) cardHasImage = true;
 			}
 		}
 	} catch { /* 无 .card 则跳过 */ }
-	if (cardBody) console.log(`  [card body]: ${cardBody.slice(0, 120)}${cardBody.length > 120 ? "..." : ""}`);
+	if (cardBody) console.log(`  [card body]: ${cardBody.slice(0, 140)}${cardBody.length > 140 ? "..." : ""}`);
+	console.log(`  [card 含插画]: ${cardHasImage ? "✅ 是（picture_base64 已嵌入）" : "❌ 否（缺 picture_base64）"}`);
 
 	const durationMs = Date.now() - start;
 	const pass = !error && (opts.expectSend ? sentMessages.length > 0 : lastReply.length > 0);
 
-	return { name: opts.name, pass, replyText: lastReply, rounds, durationMs, sentMessages, error, cardBody };
+	return { name: opts.name, pass, replyText: lastReply, rounds, durationMs, sentMessages, error, cardBody, cardHasImage };
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
