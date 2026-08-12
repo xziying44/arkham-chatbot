@@ -315,11 +315,16 @@ async function runScenario(
 					scopeId: scope.id, getReplyToMsgId, workspaceDir,
 					send: async () => { console.log("  [stub] send_card"); },
 				}),
-				createRenderCardTool({
-					workspaceDir,
-					arkhamBinPath: ARKHAM_BIN,
-					arkhamAssetsDir: ARKHAM_ASSETS,
-				}),
+				(() => {
+					const rt = createRenderCardTool({ workspaceDir, arkhamBinPath: ARKHAM_BIN, arkhamAssetsDir: ARKHAM_ASSETS });
+					return {
+						...rt,
+						execute: async (id: any, params: any, signal: any, onUpdate: any) => {
+							console.log(`  [render] picturePath=${params.picturePath ?? "(无→不嵌图)"}`);
+							return rt.execute(id, params, signal, onUpdate);
+						},
+					};
+				})(),
 				createAskUserTool({
 					getReplyToMsgId, pendingAskHolder, scopeKind: scope.kind,
 					sendKeyboard: async () => {},
@@ -329,11 +334,23 @@ async function runScenario(
 				// search_cards 不需要在这里加（它通过 loadCardIndex 全局缓存）
 			}
 			if (MINIMAX_API_KEY) {
-				tools.push(createGenerateImageTool({
+				const genTool = createGenerateImageTool({
 					apiKey: MINIMAX_API_KEY,
 					apiBase: process.env.MINIMAX_API_BASE,
 					workspaceDir,
-				}));
+				});
+				// 包装：打印调用参数 + 返回摘要，定位生图成功/失败
+				tools.push({
+					...genTool,
+					execute: async (id: any, params: any, signal: any, onUpdate: any) => {
+						const t0 = Date.now();
+						console.log(`  [genimg] → type=${params.type} desc=${String(params.description).slice(0, 70)}`);
+						const result = await genTool.execute(id, params, signal, onUpdate);
+						const text = (result as any).content?.[0]?.text ?? "";
+						console.log(`  [genimg] ← ${Date.now() - t0}ms: ${text.slice(0, 140)}`);
+						return result;
+					},
+				});
 			}
 			return tools;
 		},
