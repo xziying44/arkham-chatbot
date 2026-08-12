@@ -135,7 +135,9 @@ async function runConcurrentScenario(
 	}
 
 	const durationMs = Date.now() - start;
-	const pass = !error && (replyA.length > 0 || sentMessages.length > 0) && (replyB.length > 0) && transcriptOk;
+	// agent 用 send_message 发声时 dispatch 返回空文本是正常的（runPrompt 在 messageSentThisRun 时返回 ""），
+	// 所以 pass 不能只看 reply：判无异常 + 两成员消息都进了 transcript + 两人都至少发了 1 条消息。
+	const pass = !error && sentMessages.length >= 2 && transcriptOk;
 	console.log(`  transcript 双成员: ${transcriptOk ? "✓" : "✗"} | 并发墙钟: ${durationMs}ms`);
 	return { name: opts.name, pass, replyText: `${replyA} | ${replyB}`, rounds: 2, durationMs, sentMessages, error };
 }
