@@ -237,6 +237,14 @@ async function main(): Promise<void> {
 		maxRounds: 40,
 	}));
 
+	// === 场景 8：选择列表（验证 ~/-/* 列表前缀 → <点> 渲染）===
+	if (should("选择列表")) results.push(await runScenario(models, model, streamFn, skills, promptLoader, cardIndex, {
+		name: "选择列表",
+		messages: ["帮我做张潜修者事件卡，3级6费，特性法术，效果：选择一项或多项：\n~将场上所有盟友支援卡以及非精英敌人卡移出游戏\n~将场上所有道具支援卡以及非弱点诡计卡移出游戏\n~将遭遇弃牌堆和调查员们的弃牌堆的所有卡移出游戏。"],
+		expectSend: true,
+		maxRounds: 40,
+	}));
+
 	// === 汇总 ===
 	console.log("\n=== 压测结果汇总 ===");
 	let allPass = true;
