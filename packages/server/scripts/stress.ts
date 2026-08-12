@@ -315,26 +315,11 @@ async function runScenario(
 					scopeId: scope.id, getReplyToMsgId, workspaceDir,
 					send: async () => { console.log("  [stub] send_card"); },
 				}),
-				(() => {
-					const rt = createRenderCardTool({ workspaceDir, arkhamBinPath: ARKHAM_BIN, arkhamAssetsDir: ARKHAM_ASSETS });
-					return {
-						...rt,
-						execute: async (id: any, params: any, signal: any, onUpdate: any) => {
-							const pp = params.picturePath;
-							if (pp) {
-								const abs = pp.startsWith("/") ? pp : join(workspaceDir, pp);
-								const { access } = await import("node:fs/promises");
-								try { await access(abs); console.log(`  [render] 图片存在 ✓ ${abs}`); }
-								catch { console.log(`  [render] 图片不存在 ✗ ${abs}`); }
-							}
-							console.log(`  [render] picturePath=${pp ?? "(无→不嵌图)"}`);
-							const result = await rt.execute(id, params, signal, onUpdate);
-							const text = (result as any).content?.[0]?.text ?? "";
-							console.log(`  [render] 返回: ${text.slice(0, 120)}`);
-							return result;
-						},
-					};
-				})(),
+				createRenderCardTool({
+					workspaceDir,
+					arkhamBinPath: ARKHAM_BIN,
+					arkhamAssetsDir: ARKHAM_ASSETS,
+				}),
 				createAskUserTool({
 					getReplyToMsgId, pendingAskHolder, scopeKind: scope.kind,
 					sendKeyboard: async () => {},
@@ -344,23 +329,11 @@ async function runScenario(
 				// search_cards 不需要在这里加（它通过 loadCardIndex 全局缓存）
 			}
 			if (MINIMAX_API_KEY) {
-				const genTool = createGenerateImageTool({
+				tools.push(createGenerateImageTool({
 					apiKey: MINIMAX_API_KEY,
 					apiBase: process.env.MINIMAX_API_BASE,
 					workspaceDir,
-				});
-				// 包装：打印调用参数 + 返回摘要，定位生图成功/失败
-				tools.push({
-					...genTool,
-					execute: async (id: any, params: any, signal: any, onUpdate: any) => {
-						const t0 = Date.now();
-						console.log(`  [genimg] → type=${params.type} desc=${String(params.description).slice(0, 70)}`);
-						const result = await genTool.execute(id, params, signal, onUpdate);
-						const text = (result as any).content?.[0]?.text ?? "";
-						console.log(`  [genimg] ← ${Date.now() - t0}ms: ${text.slice(0, 140)}`);
-						return result;
-					},
-				});
+				}));
 			}
 			return tools;
 		},
