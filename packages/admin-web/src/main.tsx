@@ -12,6 +12,8 @@ import Bots from "./pages/Bots";
 import Sessions from "./pages/Sessions";
 import SessionDetail from "./pages/SessionDetail";
 import Messages from "./pages/Messages";
+import Conversations from "./pages/Conversations";
+import TrainingSamples from "./pages/TrainingSamples";
 import Logs from "./pages/Logs";
 import Settings from "./pages/Settings";
 import Prompts from "./pages/Prompts";
@@ -39,6 +41,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="sessions/:botId/:kind/:scopeId" element={<SessionDetail />} />
               <Route path="sessions/:botId/:kind/:scopeId/:memberId" element={<SessionDetail />} />
               <Route path="messages" element={<Messages />} />
+              <Route path="conversations" element={<Conversations />} />
+              <Route path="training-samples" element={<TrainingSamples />} />
               <Route path="logs" element={<Logs />} />
               <Route path="memories" element={<Memories />} />
               <Route path="skills" element={<Skills />} />

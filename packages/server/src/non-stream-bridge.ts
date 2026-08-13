@@ -255,6 +255,8 @@ function nonStreamOpenAI(
 				usage,
 				stopReason,
 				timestamp: now,
+			// reasoning_content 挂到自定义字段（不进 content blocks，避免破坏多轮 tool_use）。训练样本归档抓取。
+			...((reasoning && reasoning.length > 0) ? { reasoningContent: reasoning } : {}),
 			};
 
 			// 发射事件序列
@@ -423,13 +425,16 @@ function nonStreamAnthropic(
 			const content: AssistantMessage["content"] = [];
 
 			// content blocks → pi-ai blocks
-			// 注意：thinking block 丢弃（同 OpenAI 分支的理由——无 signature 的 thinking
-			// block 会导致 DeepSeek 兼容端点多轮 tool_use 时 400）。reasoning 内容对 agent 逻辑无用。
+			// 注意：thinking block 不放进 content（无 signature 会破坏多轮 tool_use），
+			// 但提取其文本挂到 reasoningContent 自定义字段（训练样本归档用）。
 			let toolCount2 = 0;
+			let reasoningAnthropic = "";
 			if (Array.isArray(data.content)) {
 				for (const block of data.content) {
 					if (block.type === "text" && block.text) {
 						content.push({ type: "text", text: block.text });
+					} else if (block.type === "thinking" && block.thinking) {
+						reasoningAnthropic += block.thinking;
 					} else if (block.type === "tool_use") {
 						const toolCall: ToolCall = {
 							type: "toolCall",
@@ -466,6 +471,8 @@ function nonStreamAnthropic(
 				usage,
 				stopReason,
 				timestamp: now,
+			// Anthropic thinking blocks 文本挂到 reasoningContent（同 OpenAI 分支理由，训练归档用）。
+			...((reasoningAnthropic.length > 0) ? { reasoningContent: reasoningAnthropic } : {}),
 			};
 
 			// 发射事件序列

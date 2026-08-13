@@ -15,6 +15,8 @@ import { verifyPassword, generateSessionToken, SESSION_COOKIE, SESSION_TTL_MS } 
 import { createBotsRoutes } from "./routes/bots.ts";
 import { createSessionsRoutes } from "./routes/sessions.ts";
 import { createMessagesRoutes } from "./routes/messages.ts";
+import { createConversationsRoutes } from "./routes/conversations.ts";
+import { createTrainingSamplesRoutes } from "./routes/training-samples.ts";
 import { createLogsRoutes } from "./routes/logs.ts";
 import { createSettingsRoutes } from "./routes/settings.ts";
 import { createMemoryRoutes } from "./routes/memories.ts";
@@ -44,6 +46,7 @@ export interface AdminServer {
  *   /api/bots*     机器人 CRUD + 启停
  *   /api/bots/:id/sessions*  会话查看/回收
  *   /api/messages* 消息流水
+ *   /api/conversations* 会话完整归档（含工具调用/结果，查阅/搜索/导出）
  *   /api/logs*     日志（含 SSE 实时流）
  *   /api/settings* 全局设置 + 提示词预览
  *   /*             admin-web 静态产物（SPA fallback）
@@ -108,6 +111,8 @@ export async function startAdminServer(opts: AdminServerOptions): Promise<AdminS
 	app.route("/api/bots", createBotsRoutes({ db, botManager }));
 	app.route("/api/bots", createSessionsRoutes({ botManager }));
 	app.route("/api/messages", createMessagesRoutes({ db }));
+	app.route("/api/conversations", createConversationsRoutes({ db }));
+	app.route("/api/training-samples", createTrainingSamplesRoutes({ db }));
 	app.route("/api/logs", createLogsRoutes({ db, logBus }));
 	app.route("/api/settings", createSettingsRoutes({ db, botManager }));
 	app.route("/api/memories", createMemoryRoutes({ db, botManager }));

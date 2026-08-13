@@ -37,7 +37,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** GET 下载（返回 Blob，用于导出文件）。带 cookie，401 跳登录。 */
+async function rawGet(path: string): Promise<Blob> {
+  const res = await fetch(path, { credentials: "include" });
+  if (!res.ok) {
+    if (res.status === 401) window.location.hash = "#/login";
+    throw new ApiError(res.status, `HTTP ${res.status}`);
+  }
+  return res.blob();
+}
+
 export const api = {
+  rawGet,
   // auth
   login: (username: string, password: string) =>
     request<{ ok: true; username: string }>("/api/auth/login", {
@@ -99,6 +110,28 @@ export const api = {
     }
     return request<import("./types").PagedResult<import("./types").Message>>(`/api/messages?${qs}`);
   },
+
+  // conversations（完整归档，含工具调用/结果）
+  listConversations: (params: Record<string, string | number | undefined>) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    }
+    return request<import("./types").PagedResult<import("./types").ConversationRecord>>(`/api/conversations?${qs}`);
+  },
+  listConversationScopes: (botId: string) =>
+    request<import("./types").ConversationScopeSummary[]>(`/api/conversations/scopes?botId=${encodeURIComponent(botId)}`),
+
+  // training-samples（训练样本，每次 run 完整快照）
+  listTrainingSamples: (params: Record<string, string | number | undefined>) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    }
+    return request<import("./types").PagedResult<import("./types").TrainingSampleListItem>>(`/api/training-samples?${qs}`);
+  },
+  getTrainingSample: (id: string) =>
+    request<import("./types").TrainingSampleRecord>(`/api/training-samples/${encodeURIComponent(id)}`),
 
   // logs
   listLogs: (params: Record<string, string | number | undefined>) => {

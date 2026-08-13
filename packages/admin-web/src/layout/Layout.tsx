@@ -10,6 +10,8 @@ const menuItems = [
   { key: "/bots", label: "机器人" },
   { key: "/sessions", label: "会话" },
   { key: "/messages", label: "消息" },
+  { key: "/conversations", label: "会话归档" },
+  { key: "/training-samples", label: "训练样本" },
   { key: "/logs", label: "日志" },
   { key: "/memories", label: "记忆" },
   { key: "/skills", label: "技能" },

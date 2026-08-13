@@ -88,6 +88,64 @@ function migrate(db: DatabaseSync): void {
 			updated_at  INTEGER NOT NULL,
 			PRIMARY KEY (bot_id, scope_kind, scope_id)
 		);
+
+		-- 会话完整归档：每条 agent 消息（user/assistant/toolResult）一行，content_json 存完整
+		-- content blocks（含工具调用参数与结果）。用于后台查阅完整对话、搜索、训练导出。
+		-- dispose 压缩 session.jsonl 不影响本表（不可变原始记录）。
+		CREATE TABLE IF NOT EXISTS conversations (
+			id            TEXT PRIMARY KEY,
+			content_hash  TEXT NOT NULL,
+			bot_id        TEXT NOT NULL,
+			scope_kind    TEXT NOT NULL,
+			scope_id      TEXT NOT NULL,
+			member_id     TEXT,
+			run_id        TEXT,
+			ts            INTEGER NOT NULL,
+			role          TEXT NOT NULL,
+			content_json  TEXT NOT NULL,
+			stop_reason   TEXT,
+			model         TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_conv_scope_ts ON conversations(scope_kind, scope_id, ts DESC);
+		CREATE INDEX IF NOT EXISTS idx_conv_bot_ts   ON conversations(bot_id, ts DESC);
+		CREATE INDEX IF NOT EXISTS idx_conv_run      ON conversations(run_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_hash ON conversations(content_hash);
+
+		-- 会话 scope 摘要：dispose 压缩时把 compactionSummary 的摘要文本存这里，
+		-- 供后台「会话归档」列表展示（每个 scope 一行，带摘要 + 时间范围 + 消息数）。
+		-- 点进去看该 scope 的完整消息（conversations 表）。
+		CREATE TABLE IF NOT EXISTS scope_summaries (
+			bot_id        TEXT NOT NULL,
+			scope_kind    TEXT NOT NULL,
+			scope_id      TEXT NOT NULL,
+			member_id     TEXT,
+			summary       TEXT NOT NULL,     -- dispose 时 compact() 生成的 LLM 摘要
+			message_count INTEGER NOT NULL DEFAULT 0,
+			first_ts      INTEGER,
+			last_ts       INTEGER,
+			updated_at    INTEGER NOT NULL,
+			PRIMARY KEY (bot_id, scope_kind, scope_id, member_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_summaries_bot_ts ON scope_summaries(bot_id, updated_at DESC);
+
+		-- 训练样本：每次 agent run（用户一条消息触发的完整处理）一行。
+		-- sample_json 存完整快照：systemPrompt + 本次 run 的完整消息序列（user/assistant/toolResult，
+		-- 含工具调用参数与结果、reasoning_content）+ 模型/参数元信息。自包含，可直接用于训练。
+		CREATE TABLE IF NOT EXISTS training_samples (
+			id            TEXT PRIMARY KEY,     -- run_id
+			bot_id        TEXT NOT NULL,
+			scope_kind    TEXT NOT NULL,
+			scope_id      TEXT NOT NULL,
+			member_id     TEXT,
+			ts            INTEGER NOT NULL,      -- run 开始时间
+			preview       TEXT,                  -- 用户消息前 N 字（列表展示用）
+			message_count INTEGER,
+			status        TEXT,                  -- ok / error
+			sample_json   TEXT NOT NULL,         -- 完整训练样本 JSON
+			created_at    INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_train_bot_ts ON training_samples(bot_id, ts DESC);
+		CREATE INDEX IF NOT EXISTS idx_train_scope  ON training_samples(scope_kind, scope_id, ts DESC);
 	`);
 }
 

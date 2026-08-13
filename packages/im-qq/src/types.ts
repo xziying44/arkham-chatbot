@@ -246,3 +246,38 @@ export interface KeyboardPayload {
 		rows: { buttons: KeyboardButton[] }[];
 	};
 }
+
+/**
+ * stream_messages 接口请求体（C2C 流式消息分片）。
+ * @see https://bot.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_stream_messages.post.html
+ */
+export interface StreamMessagePayload {
+	content_type?: "text" | "markdown";
+	content_raw?: string;
+	/** 1=生成中，10=生成结束。末片必须为 10。 */
+	input_state?: 1 | 10;
+	/** append=拼接到已下发内容（默认）；replace=全量正文（受前缀锁定约束）。 */
+	input_mode?: "append" | "replace";
+	/** 分片序号，从 0 递增。 */
+	index?: number;
+	/** 流式消息 ID。首片不传（服务端生成），续片/末片必须携带。 */
+	stream_msg_id?: string;
+	/** 被动回复关联的用户消息 ID（与 event_id 二选一）。 */
+	msg_id?: string;
+	/** 被动回复事件 ID（与 msg_id 二选一）。 */
+	event_id?: string;
+	/** 消息序号，用于去重。 */
+	msg_seq?: number;
+	/** true 时为召回消息，不校验 msg_id/event_id 有效期（消耗主动消息配额）。 */
+	is_wakeup?: boolean;
+}
+
+/** stream_messages 响应。 */
+export interface StreamMessageResult {
+	/** 流式消息 ID（首片后用于串联续片/末片）。 */
+	id: string;
+	timestamp: string;
+	ext_info?: { ref_idx?: string };
+	/** 流式消息剩余可用长度（字符数）。 */
+	remain_msg_len?: number;
+}

@@ -64,6 +64,54 @@ export interface Message {
   error: string | null;
 }
 
+/** 会话完整归档记录（含工具调用/结果）。 */
+export interface ConversationRecord {
+  id: string;
+  botId: string;
+  scopeKind: string;
+  scopeId: string;
+  memberId: string | null;
+  runId: string | null;
+  ts: number;
+  role: string;
+  /** 完整 content blocks 的 JSON 字符串。 */
+  contentJson: string;
+  stopReason: string | null;
+  model: string | null;
+}
+
+/** 训练样本列表项（不含 sample_json，轻量）。 */
+export interface TrainingSampleListItem {
+  id: string;
+  botId: string;
+  scopeKind: string;
+  scopeId: string;
+  memberId: string | null;
+  ts: number;
+  preview: string | null;
+  messageCount: number | null;
+  status: string | null;
+  createdAt: number;
+}
+
+/** 训练样本完整记录（含 sample_json）。 */
+export interface TrainingSampleRecord extends TrainingSampleListItem {
+  sampleJson: string;
+}
+
+/** 按 scope 聚合的会话摘要（导航用）。 */
+export interface ConversationScopeSummary {
+  scopeKind: string;
+  scopeId: string;
+  memberId: string | null;
+  summary: string | null;
+  messageCount: number;
+  firstTs: number | null;
+  lastTs: number | null;
+  updatedAt: number;
+  hasSummary: boolean;
+}
+
 export interface LogEntry {
   id: number;
   ts: number;

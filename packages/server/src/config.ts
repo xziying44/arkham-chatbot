@@ -79,6 +79,12 @@ export interface AppConfig {
 		readonly username: string;
 		readonly password?: string;
 	};
+	/**
+	 * 私聊（C2C）流式输出开关：把 agent 每轮非工具文字实时流到 QQ stream_messages
+	 * 的 markdown 引用块作为「思考可见」，减少多轮工具流程的死寂等待。
+	 * 默认 true；出问题时设 false 一键退回批量发送。
+	 */
+	readonly c2cStreaming: boolean;
 }
 
 function optional(name: string): string | undefined {
@@ -165,6 +171,7 @@ export function loadConfig(): AppConfig {
 			username: process.env.ADMIN_USERNAME ?? "admin",
 			password: optional("ADMIN_PASSWORD"),
 		},
+		c2cStreaming: bool("QQ_C2C_STREAMING", true),
 	};
 }
 

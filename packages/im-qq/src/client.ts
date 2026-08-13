@@ -5,6 +5,8 @@ import type {
 	KeyboardPayload,
 	MessageAuditResult,
 	SendMessageResult,
+	StreamMessagePayload,
+	StreamMessageResult,
 	UploadPrepareResult,
 	WsGatewayInfo,
 } from "./types.ts";
@@ -241,6 +243,49 @@ export class QQClient {
 	}
 
 	/**
+	 * 开启一条 C2C 流式消息（首片），返回 {@link StreamSession} 用于续片/末片。
+	 *
+	 * 仅 user scope 有效（QQ 流式接口只支持 C2C）；群聊 scope 会抛错，调用方应在
+	 * 调用前自行判断并降级到普通 sendText。
+	 *
+	 * @param scope 目标 scope（必须 user）
+	 * @param opts.msgId  被动回复关联的用户消息 ID
+	 * @param opts.contentType  text/markdown，默认 markdown
+	 * @param opts.firstContent  首片正文（如 "> 💭 "）
+	 * @returns StreamSession（已发首片，含 stream_msg_id）
+	 */
+	async startStream(
+		scope: ScopeTarget,
+		opts: { msgId?: string; contentType?: "text" | "markdown"; firstContent?: string },
+	): Promise<StreamSession> {
+		if (scope.kind !== "user") {
+			throw new Error("stream_messages 仅支持 C2C（user scope），群聊请走批量发送降级");
+		}
+		// 续片/末片复用的 POST 闭包：不带 msg_seq。
+		// 官方示例（doc §2.4）续片/末片只有 stream_msg_id + index 串联，不带 msg_seq——
+		// 续片带递增 msg_seq 会被服务端判为异常返回 50001（已在真机压测确认）。
+		const post = (body: StreamMessagePayload) =>
+			this.authedPost(`${scope.path}/stream_messages`, body)
+				.then(async (res) => {
+					if (!res.ok) {
+						throw new Error(`stream_messages failed: ${res.status} ${await res.text()}`);
+					}
+					return (await res.json()) as StreamMessageResult;
+				});
+		const first = await post({
+			input_mode: "append",
+			input_state: 1,
+			index: 0,
+			content_type: opts.contentType ?? "markdown",
+			content_raw: opts.firstContent ?? "",
+			msg_id: opts.msgId,
+			// 首片带 msg_seq（被动回复去重），续片/末片不带（见 post 闭包注释）。
+			msg_seq: ++this.msgSeq,
+		});
+		return new StreamSession(post, first, opts.contentType ?? "markdown", opts.msgId);
+	}
+
+	/**
 	 * 大文件分片上传第一步：预上传 upload_prepare。
 	 * 服务端返回 upload_id + 各分片的预签名 URL + 分片大小。
 	 */
@@ -434,5 +479,93 @@ export class QQClient {
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
 		return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+	}
+}
+
+/**
+ * C2C 流式消息会话：封装 stream_messages 的首片/续片/末片状态流转。
+ *
+ * 仅用 append 模式（无 replace 的前缀锁定约束，不会触发 40007）：
+ * - {@link append} 续片：input_state=1，index 递增，正文拼接到已下发内容。
+ * - {@link finish} 末片：input_state=10，空正文收尾（必须发，否则用户端停在最后一帧）。
+ *
+ * 异常安全：finish 内部 catch 所有错误——末片失败也不抛，避免吞掉调用方的
+ * 真正错误（dispatch 抛错时仍要走错误回复路径）。
+ */
+export class StreamSession {
+	private index = 0;
+	private streamMsgId: string;
+	private finished = false;
+
+	/**
+	 * @param post 续片/末片复用的 POST 闭包（不带 msg_seq，见 startStream 注释）
+	 * @param firstResult 首片响应（提供 stream_msg_id）
+	 * @param contentType 内容类型，续片/末片复用（doc 示例续片也带 content_type）
+	 * @param msgId 被动回复关联的 msg_id，续片/末片必带（真机压测确认：续片不带 msg_id 会 50001）
+	 */
+	constructor(
+		private readonly post: (body: StreamMessagePayload) => Promise<StreamMessageResult>,
+		firstResult: StreamMessageResult,
+		private readonly contentType: "text" | "markdown" = "markdown",
+		private readonly msgId?: string,
+	) {
+		this.streamMsgId = firstResult.id;
+	}
+
+	/** 续片：input_state=1，append 模式，正文拼接到已下发内容。 */
+	async append(delta: string): Promise<StreamMessageResult | undefined> {
+		if (this.finished) return undefined;
+		try {
+			const res = await this.send({ content_raw: delta, input_state: 1, input_mode: "append" });
+			return res;
+		} catch (e) {
+			// 续片失败标记结束，避免后续 append 继续撞同一错误刷屏。
+			console.warn(`[qq-stream] append 失败，停止后续流式: ${(e as Error).message}`);
+			this.finished = true;
+			return undefined;
+		}
+	}
+
+	/**
+	 * 正在输入心跳：发一个 input_state=1、空正文的续片，刷新「对方正在输入」指示。
+	 * 用于 agent 跑 LLM（无文字产出）的间隙维持指示，避免用户以为卡住。
+	 * 异常吞掉（心跳失败不影响主流程）。
+	 */
+	async typingPing(): Promise<void> {
+		if (this.finished) return;
+		try {
+			await this.send({ content_raw: "", input_state: 1, input_mode: "append" });
+		} catch (e) {
+			console.warn(`[qq-stream] typingPing 失败（忽略）: ${(e as Error).message}`);
+		}
+	}
+
+	/**
+	 * 末片：input_state=10 收尾。空正文 + append 模式。
+	 * 幂等：多次调用只发一次末片。异常吞掉（见类注释）。
+	 */
+	async finish(): Promise<void> {
+		if (this.finished) return;
+		this.finished = true;
+		try {
+			await this.send({ content_raw: "", input_state: 10, input_mode: "append" });
+		} catch (e) {
+			console.warn(`[qq-stream] 末片收尾失败（已忽略，用户端可能停在最后一片）: ${(e as Error).message}`);
+		}
+	}
+
+	private async send(partial: Omit<StreamMessagePayload, "index" | "stream_msg_id" | "content_type" | "msg_id">): Promise<StreamMessageResult> {
+		const res = await this.post({
+			...partial,
+			// 续片/末片必带 content_type + msg_id（真机压测确认：缺 msg_id → 50001）。
+			content_type: this.contentType,
+			msg_id: this.msgId,
+			index: ++this.index,
+			stream_msg_id: this.streamMsgId,
+		});
+		// 续片/末片理论上不变更 stream_msg_id，但若服务端返回新 id 则更新。
+		if (res?.id) this.streamMsgId = res.id;
+		console.log(`[qq-stream] send ok index=${this.index} state=${partial.input_state} len=${(partial.content_raw ?? "").length} remain=${res?.remain_msg_len ?? "?"}`);
+		return res;
 	}
 }

@@ -31,7 +31,7 @@ export type { IndexedCard, SearchParams, SearchResult } from "./tools/search-car
 export { createRestrictedBashTool, reviewBashCommand } from "./tools/restricted-bash.ts";
 export { loadSkillsFromDir, SANDBOX_SKILLS_DIR } from "./skills/skill-loader.ts";
 export { SessionManager } from "./session/session-manager.ts";
-export type { SessionManagerOptions, ActiveScopeInfo, ActiveScopeDetail, SessionEnvContext, AttachmentRef } from "./session/session-manager.ts";
+export type { SessionManagerOptions, ActiveScopeInfo, ActiveScopeDetail, SessionEnvContext, AttachmentRef, DispatchOptions } from "./session/session-manager.ts";
 export { HistoryStore } from "./session/history.ts";
 export { MemoryFiles } from "./session/memory-files.ts";
 export { TranscriptStore } from "./session/transcript-store.ts";

@@ -155,6 +155,30 @@ export interface BotSessionOptions {
 	 * 读取并 reject（把文字作为响应）。由 SessionManager 创建，与工具共享同一引用。
 	 */
 	readonly pendingAskHolder?: PendingAskHolder;
+	/**
+	 * 会话归档回调：runPrompt 成功后把本轮新增消息（含工具调用/结果）回调出去，
+	 * 供上层（server → ConversationRepository）写入完整归档（后台查阅/搜索/训练导出）。
+	 * core 层不依赖 store，只触发回调；scope 信息由 SessionManager 注入时绑定。
+	 */
+	readonly archiveMessages?: (messages: AgentMessage[], runId: string) => void;
+	/**
+	 * scope 摘要回调：dispose 压缩后把 compactionSummary 的 LLM 摘要回调出去，
+	 * 供上层（server → ScopeSummaryRepository）写入。后台「会话归档」列表展示用。
+	 */
+	readonly archiveScopeSummary?: (summary: string, messageCount: number) => void;
+	/**
+	 * 训练样本回调：runPrompt 结束后把本次 run 的完整快照（systemPrompt + 完整消息序列
+	 * 含工具调用/结果/reasoning + 模型元信息）回调出去，供上层写入 training_samples 表。
+	 * 自包含的训练样本，一次 run 一份。
+	 */
+	readonly archiveTrainingSample?: (sample: {
+		runId: string;
+		userText: string;
+		messages: AgentMessage[];
+		systemPrompt: string;
+		status: "ok" | "error";
+		error?: string;
+	}) => void;
 }
 
 export class ChatBotSession {
@@ -175,6 +199,19 @@ export class ChatBotSession {
 	private sessionContextMsg: AgentMessage | undefined;
 	/** 本次 prompt run 中 agent 是否已通过 send_message 工具发送过消息。 */
 	private messageSentThisRun = false;
+	/**
+	 * 本次 prompt run 中「自上次 send_message/ask_user 以来」的连续工具调用次数。
+	 * send_message/ask_user（与用户沟通）后归零；其它工具 +1。
+	 * 达到 {@link TOOL_NUDGE_THRESHOLD} 的倍数时，通过 afterToolCall 在工具结果里
+	 * 追加一条系统提醒，催 agent 推进任务或回复用户——防止陷入反复搜索（如 grep 历史）
+	 * 的死循环（真机复现：37 轮 bash grep 不停不回复）。
+	 */
+	private toolCallCountThisRun = 0;
+	/**
+	 * 连续工具调用提醒阈值。8 = 正常制卡流程（中间约 5-6 次工具）不误触，
+	 * 死循环在第 8 次收到提醒可及时收手。
+	 */
+	private static readonly TOOL_NUDGE_THRESHOLD = 8;
 	/**
 	 * 连续失败计数：每次回复失败（空回复/异常）+1，成功归零。
 	 * 达到 {@link MAX_CONSECUTIVE_FAILURES} 触发自愈——清空上下文重启，避免毒化死循环。
@@ -292,6 +329,27 @@ export class ChatBotSession {
 				const compacted = await this.runtimeCompactIfNeeded(messages);
 				return this.sessionContextMsg ? [this.sessionContextMsg, ...compacted] : compacted;
 			},
+			// 工具次数提醒：连续调用工具（未向用户反馈）达阈值时，在工具结果里追加系统提醒，
+			// 催 agent 推进任务或回复用户。防止反复搜索（grep 历史等）的死循环。
+			// send_message/ask_user 视为"已与用户沟通"，归零计数。
+			afterToolCall: async (ctx) => {
+				const name = (ctx.toolCall as { name?: string }).name ?? "";
+				if (name === "send_message" || name === "ask_user") {
+					this.toolCallCountThisRun = 0;
+					return undefined;
+				}
+				this.toolCallCountThisRun++;
+				const n = this.toolCallCountThisRun;
+				if (n >= ChatBotSession.TOOL_NUDGE_THRESHOLD && n % ChatBotSession.TOOL_NUDGE_THRESHOLD === 0) {
+					const original = (ctx.result as { content?: Array<{ type: "text"; text: string }> })?.content ?? [];
+					const nudge = {
+						type: "text" as const,
+						text: `⚠️ 系统提醒：你已连续调用 ${n} 次工具（期间未回复用户）。请确认任务进展正常——若在做卡/查卡正常推进请继续；若陷入重复搜索（如反复 grep、翻 history/ 找线索），请立即停止，用 send_message 告诉用户当前进展，或 ask_user 澄清需求。`,
+					};
+					return { content: [...original, nudge] };
+				}
+				return undefined;
+			},
 		});
 		// 群聊消息合并：steer 队列设为 "all"，drain 时把积攒的所有消息一次性注入。
 		this.agent.steeringMode = "all";
@@ -330,12 +388,15 @@ export class ChatBotSession {
 	 *
 	 * @returns 回复文本 + 该回复应引用的消息 id。
 	 */
-	async prompt(message: {
-		text: string;
-		senderId: string;
-		senderName: string;
-		platformMessageId?: string;
-	}): Promise<{ text: string; replyToMessageId?: string }> {
+	async prompt(
+		message: {
+			text: string;
+			senderId: string;
+			senderName: string;
+			platformMessageId?: string;
+		},
+		opts?: { onText?: (delta: string) => void },
+	): Promise<{ text: string; replyToMessageId?: string }> {
 		const isGroup = this.scope.kind === "group";
 		const formatted = isGroup
 			? `[${message.senderId}]: ${message.text}`
@@ -356,12 +417,13 @@ export class ChatBotSession {
 				return this.runInFlight.then((text) => ({ text, replyToMessageId: this.opts.replyToHolder?.current }));
 			}
 			this.agent.steer({ role: "user", content: formatted, timestamp: Date.now() });
+			// steer 合并的消息不传 onText——当前 run 的流式由触发它的那条消息负责，避免重复开流。
 			return this.runInFlight.then((text) => ({ text, replyToMessageId: this.opts.replyToHolder?.current }));
 		}
 
 		// 空闲 → 开新 run。
 		this.triggerMessageId = message.platformMessageId;
-		this.runInFlight = this.runPrompt(formatted);
+		this.runInFlight = this.runPrompt(formatted, opts?.onText);
 		try {
 			const text = await this.runInFlight;
 			return { text, replyToMessageId: this.opts.replyToHolder?.current };
@@ -373,9 +435,11 @@ export class ChatBotSession {
 	}
 
 	/** 实际跑一次 agent.prompt，收集 assistant 文本。 */
-	private async runPrompt(formattedText: string): Promise<string> {
+	private async runPrompt(formattedText: string, onText?: (delta: string) => void): Promise<string> {
 		const hasSendTool = !!this.opts.onSendMessage;
+		const runId = uuidv7(); // 本次 run 的唯一 id（归档聚合用）
 		this.messageSentThisRun = false;
+		this.toolCallCountThisRun = 0;
 		// 每次新 run 重置「上次运行中压缩位置」——允许本轮在 token 超阈值时压缩。
 		this.lastRuntimeCompactionLen = undefined;
 		// 记录 run 前的消息数，结束后把本轮新增的消息增量追加到 session.jsonl，
@@ -383,6 +447,47 @@ export class ChatBotSession {
 		const beforeLen = this.agent.state.messages.length;
 		const collector = new AssistantTextCollector();
 		const unsubscribe = this.agent.subscribe((event) => collector.onEvent(event));
+		// 文字增量订阅：私聊流式时把 agent 的中间思考文字回调给上层（router → stream_messages）。
+		// 关键区分（按每轮 message_end 的 stopReason）：
+		// - toolUse 轮的文字 = agent 的中间思考（「我先查一下…」「数值校验通过…」）→ 流到引用块。
+		// - stop/length 轮的文字 = 最终回复 → 不流（由 send_message 或兜底 sendText 发，避免重复）。
+		// - thinking_delta（reasoning_content / DeepSeek CoT）不外发——用户决策不显示推理链。
+		// - send_message 的文字在 toolCall 参数里，不在 content text block，天然不触发 text_delta，
+		//   所以不需要靠 messageSentThisRun 拦截（早期版本误加了，反而把后续轮的真思考全掐了）。
+		// 实现：每轮 buffer 到 message_end，按 stopReason 决定流不流，然后清空进下一轮。
+		let unsubscribeOnText: (() => void) | undefined;
+		if (onText) {
+			let roundText = "";
+			unsubscribeOnText = this.agent.subscribe((event) => {
+				const e = event as {
+					type: string;
+					assistantMessageEvent?: { type: string; delta?: string };
+					message?: { stopReason?: string };
+					toolName?: string;
+					args?: Record<string, unknown>;
+				};
+				if (
+					e.type === "message_update" &&
+					e.assistantMessageEvent?.type === "text_delta" &&
+					typeof e.assistantMessageEvent.delta === "string"
+				) {
+					roundText += e.assistantMessageEvent.delta;
+				} else if (e.type === "message_end") {
+					// 工具轮（agent 还要继续调工具）的文字 = 中间思考，外发。
+					// 最终轮（stop/length，agent 不再调工具）的文字 = 回复，不外发。
+					if (e.message?.stopReason === "toolUse" && roundText) {
+						onText(roundText);
+					}
+					roundText = "";
+				} else if (e.type === "tool_execution_start") {
+					// 工具调用也流式：映射成人类可读描述（不显示原始命令），丰富消息流。
+					// 这是流式内容的「保底来源」——即使 agent 不写 content（DeepSeek 常如此），
+					// 工具调用描述也能让用户看到进度。
+					const desc = describeToolCall(e.toolName ?? "", e.args);
+					if (desc) onText(desc);
+				}
+			});
+		}
 		try {
 			await this.agent.prompt(formattedText);
 		} catch (error) {
@@ -395,6 +500,7 @@ export class ChatBotSession {
 			return "服务器开小差了，请稍后再试。";
 		} finally {
 			unsubscribe();
+			unsubscribeOnText?.();
 		}
 		// 检测本轮是否「无有效输出」：agent 既没调 send_message，最终文字也为空。
 		// 典型成因——DeepSeek 的 anthropic 兼容端点不严格遵守 thinking 的 budget_tokens，
@@ -418,6 +524,17 @@ export class ChatBotSession {
 			if (newMessages.length > 0) {
 				// 本成员自己的 session.jsonl（活动上下文）。
 				await this.history.appendAll(newMessages).catch(() => {});
+				// 完整归档（后台查阅/搜索/训练导出）：回调给上层写 conversations 表。
+				// 含工具调用参数与结果，不随 dispose 压缩丢失。
+				this.opts.archiveMessages?.(newMessages, runId);
+				// 训练样本：本次 run 的完整自包含快照（systemPrompt + newMessages + 元信息）。
+				this.opts.archiveTrainingSample?.({
+					runId,
+					userText: formattedText,
+					messages: newMessages,
+					systemPrompt: this.systemPromptCache ?? "",
+					status: "ok",
+				});
 				// 群共享 transcript：只追加机器人的回复部分（assistant + toolResult）。
 				// 入站 user 消息由 dispatcher 单独写入（那里对每条群消息都写，含 steer 的情况），
 				// 这里若再写 user 会导致 transcript 里 user 消息重复。
@@ -503,6 +620,12 @@ export class ChatBotSession {
 			await this.history.save(compacted);
 			// 归档用原始快照（未压缩），保留完整对话供 agent read 查阅。
 			await this.history.archiveByDay(historySnapshot);
+			// scope 摘要：提取 compactionSummary 的 LLM 摘要回调给上层存库。
+			// compacted[0] 是 compactionSummary（压缩成功时）；失败兜底时是原消息无 summary。
+			const summary = extractCompactionSummary(compacted[0]);
+			if (summary && this.opts.archiveScopeSummary) {
+				this.opts.archiveScopeSummary(summary, historySnapshot.length);
+			}
 		} finally {
 			this.agent.abort();
 			await this.agent.waitForIdle().catch(() => {});
@@ -701,4 +824,98 @@ class AssistantTextCollector {
 	get text(): string {
 		return this.finalParts.join("").trim();
 	}
+}
+
+/**
+ * 把工具调用映射成人类可读的简短描述（用于私聊流式，让用户看到 agent 在干什么）。
+ * 原则：简化成人类可读——不显示原始命令/绝对路径/JSON，只用 emoji + 动词 + 关键信息
+ *（文件名 / 卡名 / 查询词 / 画面概要）。返回 undefined 表示不展示（如 send_message 本身
+ * 就是对用户的输出，不重复描述）。
+ */
+function describeToolCall(name: string, args: Record<string, unknown> | undefined): string | undefined {
+	switch (name) {
+		case "generate_image": {
+			const desc = String(args?.description ?? "").trim();
+			if (!desc) return "🎨 生成插画";
+			// 画面描述可能很长，取前 20 字作概要，超出加省略号。
+			const summary = desc.length > 20 ? `${desc.slice(0, 20)}…` : desc;
+			return `🎨 生成插画：${summary}`;
+		}
+		case "render_card": {
+			const cardName = extractCardName(args?.cardJson);
+			return cardName ? `🖼️ 渲染卡图：${cardName}` : "🖼️ 渲染卡图";
+		}
+		case "validate_card": {
+			const cardName = extractCardName(args?.cardJson);
+			return cardName ? `✓ 校验卡牌格式：${cardName}` : "✓ 校验卡牌格式";
+		}
+		case "search_cards": {
+			const query = String(args?.query ?? "").trim();
+			return query ? `🔍 搜索卡牌：${query}` : "🔍 搜索官方卡牌库";
+		}
+		case "read": {
+			const filename = basename(String(args?.path ?? ""));
+			return filename ? `📖 查阅 ${filename}` : "📖 查阅资料";
+		}
+		case "edit":
+		case "write": {
+			const filename = basename(String(args?.path ?? ""));
+			return filename ? `✏️ 写入 ${filename}` : "✏️ 写入文件";
+		}
+		case "bash":
+			return describeBash(String(args?.command ?? ""));
+		// 以下是对用户的输出类工具，本身会发消息/图/文件/按钮，不在流式里重复描述
+		case "send_message":
+		case "send_image":
+		case "send_card":
+		case "ask_user":
+			return undefined;
+		default:
+			return undefined;
+	}
+}
+
+/** 取路径的 basename（去除目录），如 skills/diy-card/x.md → x.md。 */
+function basename(p: string): string {
+	if (!p) return "";
+	return p.split("/").pop() ?? p;
+}
+
+/** 从 cardJson（可能是 JSON 字符串或对象）提取卡名。 */
+function extractCardName(cardJson: unknown): string | undefined {
+	if (!cardJson) return undefined;
+	if (typeof cardJson === "string") {
+		try {
+			const obj = JSON.parse(cardJson) as { name?: string };
+			return obj.name?.trim() || undefined;
+		} catch {
+			return undefined;
+		}
+	}
+	if (typeof cardJson === "object" && cardJson !== null) {
+		const name = (cardJson as { name?: string }).name;
+		return typeof name === "string" ? name.trim() || undefined : undefined;
+	}
+	return undefined;
+}
+
+/** 把 bash 命令映射成人类可读描述；不显示原始命令。 */
+function describeBash(cmd: string): string | undefined {
+	if (!cmd) return undefined;
+	if (cmd.includes("balance_check")) {
+		// balance_check 的参数是 JSON，含卡名；尝试提取。
+		const m = cmd.match(/"name"\s*:\s*"([^"]+)"/);
+		return m ? `🔍 校验数值平衡：${m[1]}` : "🔍 校验数值平衡";
+	}
+	if (cmd.includes("arkham-cli") || cmd.includes("arkham_cli")) return "🖼️ 渲染卡图";
+	if (/^\s*find\b/.test(cmd)) return "📂 查找文件";
+	if (/^\s*ls\b/.test(cmd)) return "📂 查看目录";
+	if (/^\s*cat\b/.test(cmd)) return "📖 查看文件内容";
+	if (/^\s*mkdir\b/.test(cmd)) return "📂 创建目录";
+	if (/^\s*grep\b/.test(cmd)) {
+		// 提取搜索词：grep -o 'pattern' 或 grep "pattern"
+		const m = cmd.match(/grep\s+(?:-[a-zA-Z]+\s+)*['"]([^'"]+)/);
+		return m ? `🔍 搜索：${m[1]}` : "🔍 搜索内容";
+	}
+	return undefined; // 其它 bash 不展示，避免噪音
 }

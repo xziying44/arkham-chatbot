@@ -25,8 +25,9 @@ export function createSendMessageTool(opts: CreateSendMessageToolOptions): Agent
 		name: "send_message",
 		label: "send_message",
 		description:
-			"发送一条消息给当前会话的用户。这是你与用户沟通的唯一方式——你的其它文字输出用户看不到。" +
-		 "在想好完整回复后调用此工具发送。不要把回复拆成多条消息，一条说清楚。" +
+			"发送一条正式回复给当前会话的用户。用于闲聊回复、长任务的开头反馈与最终结果。" +
+		 "你的其它文字输出（工作过程描述）不是正式回复——私聊里它们会实时流给用户作思考可见，但正式结论用本工具发。" +
+		 "不要把回复拆成多条消息，一条说清楚。" +
 		 "支持 QQ markdown：加粗 **、列表、引用 >、标题 # 等。",
 		parameters: sendMessageSchema,
 		async execute(_toolCallId, params) {

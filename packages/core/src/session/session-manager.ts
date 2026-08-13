@@ -12,6 +12,23 @@ import type { IncomingMessage, OutgoingMessage } from "./message.ts";
 import { TranscriptStore } from "./transcript-store.ts";
 import { Semaphore } from "./semaphore.ts";
 
+/**
+ * dispatch 的可选参数。
+ *
+ * 目前仅用于私聊流式输出：router 传入 {@link onText} 回调，
+ * ChatBotSession 在 agent 每轮文字增量（text_delta）时回调，
+ * router 把增量喂给平台的流式通道（如 QQ stream_messages）。
+ *
+ * 群聊路径不消费 onText（群聊无原生流式接口）。
+ */
+export interface DispatchOptions {
+	/**
+	 * agent 文字增量回调（每个 text_delta 触发一次）。
+	 * 仅私聊路径透传给 ChatBotSession；群聊路径忽略。
+	 */
+	readonly onText?: (delta: string) => void;
+}
+
 /** 默认每群最大并发 agent run 数。超出排队，避免 N 人同时发指令打爆 LLM 端点。 */
 const DEFAULT_GROUP_MAX_CONCURRENT = 3;
 
@@ -94,6 +111,38 @@ export interface SessionManagerOptions {
 	 * 返回相对于该会话 workspace 的路径（如 "inbox/1234_photo.jpg"）。
 	 */
 	readonly onAttachment?: (scope: ScopeKey, memberId: string | undefined, attachment: AttachmentRef) => Promise<string>;
+	/**
+	 * 会话归档回调。runPrompt 成功后把本轮新增消息（含工具调用/结果）回调，
+	 * 上层据此写入完整归档（ConversationRepository）。core 不依赖 store，只触发回调。
+	 */
+	readonly archiveMessages?: (
+		messages: AgentMessage[],
+		ctx: { scope: ScopeKey; memberId: string | undefined; runId: string },
+	) => void;
+	/**
+	 * scope 摘要回调：dispose 压缩后把 compactionSummary 的 LLM 摘要回调。
+	 * 上层据此写 scope_summaries 表（后台列表展示）。
+	 */
+	readonly archiveScopeSummary?: (
+		summary: string,
+		messageCount: number,
+		ctx: { scope: ScopeKey; memberId: string | undefined },
+	) => void;
+	/**
+	 * 训练样本回调：runPrompt 结束后把本次 run 的完整快照回调。
+	 * 上层据此写 training_samples 表（自包含训练样本）。
+	 */
+	readonly archiveTrainingSample?: (
+		sample: {
+			runId: string;
+			userText: string;
+			messages: AgentMessage[];
+			systemPrompt: string;
+			status: "ok" | "error";
+			error?: string;
+		},
+		ctx: { scope: ScopeKey; memberId: string | undefined },
+	) => void;
 }
 
 interface ActiveEntry {
@@ -137,8 +186,8 @@ interface GroupContext {
  * 其它职责：按需激活、TTL 回收、断电续传（session.jsonl）。
  */
 export class SessionManager {
-	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment">> &
-		Pick<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "promptLoader" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment">;
+	private readonly opts: Required<Omit<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment" | "archiveMessages" | "archiveScopeSummary" | "archiveTrainingSample">> &
+		Pick<SessionManagerOptions, "persona" | "thinkingLevel" | "skills" | "promptLoader" | "envFactory" | "model" | "models" | "streamFn" | "extraToolsFactory" | "onSendMessage" | "onAttachment" | "archiveMessages" | "archiveScopeSummary" | "archiveTrainingSample">;
 	/** 活跃会话池。key：私聊 `user:<id>`；群成员 `group:<groupId>:<memberId>`。 */
 	private readonly active = new Map<string, ActiveEntry>();
 	/** 群级上下文（transcript + 记忆 + 信号量）。key: groupId。 */
@@ -186,8 +235,13 @@ export class SessionManager {
 	 * - 群聊：路由到 (group, senderId) 的成员会话；多人同时发指令并行处理（群内并发上限把关）。
 	 *   同一成员的多条快速消息：第一条开 run，后续 steer 进去合并（同成员串行）。
 	 * - 私聊：路由到 (user) 会话，行为同前。
+	 *
+	 * @param opts.onText 私聊流式回调（agent 文字增量）。群聊路径忽略。
 	 */
-	async dispatch(message: IncomingMessage & { attachments?: readonly AttachmentRef[] }): Promise<OutgoingMessage> {
+	async dispatch(
+		message: IncomingMessage & { attachments?: readonly AttachmentRef[] },
+		opts?: DispatchOptions,
+	): Promise<OutgoingMessage> {
 		if (this.shuttingDown) {
 			return { text: "（服务正在关闭，暂时无法处理消息。）" };
 		}
@@ -210,11 +264,15 @@ export class SessionManager {
 		if (message.scope.kind === "group") {
 			return this.dispatchGroup(message, text);
 		}
-		return this.dispatchUser(message, text);
+		return this.dispatchUser(message, text, opts);
 	}
 
 	/** 私聊路径：一人一会话。 */
-	private async dispatchUser(message: IncomingMessage & { attachments?: readonly AttachmentRef[] }, text: string): Promise<OutgoingMessage> {
+	private async dispatchUser(
+		message: IncomingMessage & { attachments?: readonly AttachmentRef[] },
+		text: string,
+		opts?: DispatchOptions,
+	): Promise<OutgoingMessage> {
 		const entry = await this.getOrCreateUser(message.scope);
 		entry.lastActivityAt = Date.now();
 		this.resetReaper(entry);
@@ -223,7 +281,7 @@ export class SessionManager {
 			senderId: message.senderId,
 			senderName: message.senderName,
 			platformMessageId: message.platformMessageId,
-		});
+		}, { onText: opts?.onText });
 		return { text: result.text, replyToMessageId: result.replyToMessageId };
 	}
 
@@ -424,6 +482,16 @@ export class SessionManager {
 			pendingAskHolder,
 			onSendMessage: this.opts.onSendMessage
 				? async (text: string) => this.opts.onSendMessage!(scope, text, replyToHolder.current)
+				: undefined,
+			// 归档回调：绑定本 session 的 scope/memberId，回调上层（server → ConversationRepository）。
+			archiveMessages: this.opts.archiveMessages
+				? (messages, runId) => this.opts.archiveMessages!(messages, { scope, memberId, runId })
+				: undefined,
+			archiveScopeSummary: this.opts.archiveScopeSummary
+				? (summary, messageCount) => this.opts.archiveScopeSummary!(summary, messageCount, { scope, memberId })
+				: undefined,
+			archiveTrainingSample: this.opts.archiveTrainingSample
+				? (sample) => this.opts.archiveTrainingSample!(sample, { scope, memberId })
 				: undefined,
 		});
 		await session.activate();

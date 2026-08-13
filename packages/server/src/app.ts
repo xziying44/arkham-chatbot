@@ -16,6 +16,9 @@ import {
 	BotRepository,
 	SettingsRepository,
 	MessageRepository,
+	ConversationRepository,
+	ScopeSummaryRepository,
+	TrainingSampleRepository,
 	LogRepository,
 	SettingsKeys,
 	type DatabaseSync,
@@ -114,6 +117,9 @@ export async function startApp(): Promise<AppRuntime> {
 	const settings = resolveSettings(config, db);
 	const { models, model } = buildModels(settings);
 	const messages = new MessageRepository(db);
+	const conversations = new ConversationRepository(db);
+	const scopeSummaries = new ScopeSummaryRepository(db);
+	const trainingSamples = new TrainingSampleRepository(db);
 
 	// 多机器人编排器。兼容端点走非流式桥接，避免 SSE 只发心跳却永不结束时
 	// SDK 请求超时失效；其它原生 API 仍使用 streamSimple。
@@ -137,6 +143,9 @@ export async function startApp(): Promise<AppRuntime> {
 		reaperIntervalMs: settings.reaperIntervalMs,
 		thinkingLevel: settings.thinkingLevel,
 		messages,
+		conversations,
+		scopeSummaries,
+		trainingSamples,
 		skillsDir: config.skillsDir,
 		promptsDir: config.promptsDir,
 		arkhamBinPath: config.arkhamBinPath,
@@ -144,6 +153,7 @@ export async function startApp(): Promise<AppRuntime> {
 		cardDatabaseDir: config.cardDatabaseDir,
 		minimax: config.minimax,
 		clearHistoryOnStart: config.clearHistoryOnStart,
+		c2cStreaming: config.c2cStreaming,
 		logger: appLog,
 	});
 

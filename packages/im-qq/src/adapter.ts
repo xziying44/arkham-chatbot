@@ -1,8 +1,9 @@
 import { groupScope, userScope } from "@arkham/chatbot-core";
-import type { ImAdapter } from "@arkham/chatbot-im-core";
+import type { ImAdapter, OpenStreamOptions, SendOutcome, StreamSink } from "@arkham/chatbot-im-core";
 import type { ImEvent } from "@arkham/chatbot-im-core";
-import { QQClient, groupTarget, userTarget, type ScopeTarget } from "./client.ts";
+import { QQClient, StreamSession, groupTarget, userTarget, type ScopeTarget } from "./client.ts";
 import { QQWebSocketReceiver, type QqIncomingMessage } from "./websocket.ts";
+import { detectUnsupportedMarkdown, stripMarkdownSyntax } from "./markdown.ts";
 import type { InteractionData, KeyboardPayload } from "./types.ts";
 
 /**
@@ -98,31 +99,62 @@ export class QQAdapter implements ImAdapter {
 		return () => this.handlers.delete(handler);
 	}
 
-	async sendText(scope: { kind: "group" | "user"; id: string }, text: string, replyToMessageId?: string): Promise<void> {
+	async sendText(scope: { kind: "group" | "user"; id: string }, text: string, replyToMessageId?: string): Promise<SendOutcome> {
 		const target = this.toTarget(scope);
 		// agent 自行决定是否在文本里写 <qqbot-at-user id="openid" /> 标签来 @ 人。
 		// adapter 不再自动拼接 @ ——由 agent 根据语境判断（显性对某人说才 @，闲聊不 @）。
+
+		// 预校验：QQ markdown 不支持代码块/表格，命中则主动走纯文本，避免一次注定失败
+		//（40034011）的网络请求和错误日志噪音。
+		const unsupported = detectUnsupportedMarkdown(text);
+		if (unsupported) {
+			const plain = stripMarkdownSyntax(text);
+			console.warn(`[qq-adapter] 预校验命中不支持的 markdown 语法（${unsupported}），主动转纯文本`);
+			await this.sendTextPlain(target, plain, replyToMessageId);
+			return {
+				degraded: true,
+				degradeReason: `内容含 QQ 不支持的 markdown 语法（${unsupported}），已转为纯文本发送，加粗/引用等格式未渲染。下次请避免使用代码块或表格。`,
+			};
+		}
+
 		// 优先发 Markdown（msg_type=2），失败则降级为纯文本（msg_type=0）。
 		// 若因 msg_id 过期（11244）失败，去掉 msg_id 重试（发主动消息）。
 		try {
 			await this.client.sendMarkdown(target, text, replyToMessageId);
+			return {};
 		} catch (mdError) {
 			const mdMsg = (mdError as Error).message;
-			console.warn("[qq-adapter] markdown 发送失败，降级纯文本:", mdMsg);
-			// msg_id 过期 → 不带 msg_id 重试
-			const expired = mdMsg.includes("11244") || mdMsg.includes("token not exist");
-			const retryMsgId = expired ? undefined : replyToMessageId;
-			try {
-				await this.client.sendText(target, text, retryMsgId);
-			} catch (textError) {
-				const textMsg = (textError as Error).message;
-				if (textMsg.includes("11244") || textMsg.includes("token not exist")) {
-					// 纯文本也因 msg_id 过期失败 → 最后一次尝试：不带 msg_id
-					console.warn("[qq-adapter] msg_id 过期，尝试主动消息（不带 msg_id）");
-					await this.client.sendText(target, text, undefined);
-				} else {
-					throw textError;
-				}
+			// 降级到纯文本（msg_type=0）前剥离 markdown 语法，否则 ** 加粗、> 引用、# 标题
+			// 等符号会原样裸露给用户——这正是"markdown 没渲染、标签全显示出来"的根因。
+			const plain = stripMarkdownSyntax(text);
+			// mdMsg 形如 `sendMessage(/v2/users/xxx) failed: 400 {"code":40034011,...}`，
+			// 含 QQ 返回的完整错误码与响应体，原样打出便于定位降级诱因（40034011=不支持语法等）。
+			console.warn(`[qq-adapter] markdown 发送失败，降级纯文本（已剥离 markdown 语法）。原始错误: ${mdMsg}`);
+			await this.sendTextPlain(target, plain, replyToMessageId);
+			return {
+				degraded: true,
+				degradeReason: `QQ 拒绝渲染 markdown（${mdMsg}），已转为纯文本发送，格式未渲染。下次请避免使用代码块或表格。`,
+			};
+		}
+	}
+
+	/**
+	 * 纯文本发送（msg_type=0）的公共路径，含 msg_id 过期重试。
+	 *
+	 * 预校验降级和 sendMarkdown 异常降级两条路径共用，避免重试逻辑重复。
+	 * 若 msg_id 过期（11244）→ 不带 msg_id 再试一次（发主动消息）。
+	 */
+	private async sendTextPlain(target: ScopeTarget, text: string, replyToMessageId?: string): Promise<void> {
+		try {
+			await this.client.sendText(target, text, replyToMessageId);
+		} catch (textError) {
+			const textMsg = (textError as Error).message;
+			if (textMsg.includes("11244") || textMsg.includes("token not exist")) {
+				// 纯文本也因 msg_id 过期失败 → 最后一次尝试：不带 msg_id
+				console.warn("[qq-adapter] msg_id 过期，尝试主动消息（不带 msg_id）");
+				await this.client.sendText(target, text, undefined);
+			} else {
+				throw textError;
 			}
 		}
 	}
@@ -168,10 +200,11 @@ export class QQAdapter implements ImAdapter {
 	 * 发送带按钮的消息（markdown 正文 + 内嵌 keyboard）。
 	 * 失败时降级为纯文本（不含按钮）。
 	 */
-	async sendKeyboard(scope: { kind: "group" | "user"; id: string }, content: string, keyboard: KeyboardPayload, replyToMessageId?: string): Promise<void> {
+	async sendKeyboard(scope: { kind: "group" | "user"; id: string }, content: string, keyboard: KeyboardPayload, replyToMessageId?: string): Promise<SendOutcome> {
 		const target = this.toTarget(scope);
 		try {
 			await this.client.sendKeyboard(target, content, keyboard, replyToMessageId);
+			return {};
 		} catch (kbError) {
 			const err = kbError as Error;
 			console.warn(`[qq-adapter] keyboard 发送失败 scope=${scope.kind}:${scope.id} name=${err.name} msg=${err.message} cause=${err.cause ?? "无"}`);
@@ -179,7 +212,7 @@ export class QQAdapter implements ImAdapter {
 			if (err.message.includes("11244") || err.message.includes("token not exist")) {
 				try {
 					await this.client.sendKeyboard(target, content, keyboard, undefined);
-					return;
+					return {};
 				} catch (retryErr) {
 					console.warn("[qq-adapter] keyboard 去 msg_id 重试也失败:", (retryErr as Error).message);
 				}
@@ -191,6 +224,7 @@ export class QQAdapter implements ImAdapter {
 			} catch {
 				await this.client.sendText(target, fallback, replyToMessageId);
 			}
+			return { degraded: true, degradeReason: "按钮消息发送失败，已降级为纯文本（按钮不可用）。" };
 		}
 	}
 
@@ -206,6 +240,32 @@ export class QQAdapter implements ImAdapter {
 	 */
 	async downloadAttachment(url: string): Promise<Buffer> {
 		return this.client.downloadAttachment(url);
+	}
+
+	/**
+	 * 开启 C2C 流式输出通道（stream_messages）。仅 user scope 支持；
+	 * 群聊或不支持时返回 undefined（调用方降级到 sendText 批量发送）。
+	 *
+	 * 开启失败（网络/限流/群聊）一律返回 undefined，不抛——调用方据此决定是否降级。
+	 */
+	async openStream(scope: { kind: "group" | "user"; id: string }, opts: OpenStreamOptions): Promise<StreamSink | undefined> {
+		if (scope.kind !== "user") return undefined;
+		try {
+			const target = this.toTarget(scope);
+			const session: StreamSession = await this.client.startStream(target, {
+				msgId: opts.msgId,
+				contentType: opts.contentType,
+				firstContent: opts.firstContent,
+			});
+			return {
+				onDelta: (delta) => session.append(delta).then(() => undefined),
+				finish: () => session.finish(),
+				keepAlive: () => session.typingPing(),
+			};
+		} catch (e) {
+			console.warn(`[qq-adapter] openStream 失败，降级到批量发送: ${(e as Error).message}`);
+			return undefined;
+		}
 	}
 
 	private toTarget(scope: { kind: "group" | "user"; id: string }): ScopeTarget {

@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile, readdir } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import type { Model, Models } from "@earendil-works/pi-ai";
-import type { StreamFn, Skill, AgentTool } from "@earendil-works/pi-agent-core";
+import type { StreamFn, Skill, AgentTool, AgentMessage } from "@earendil-works/pi-agent-core";
 import {
 	SessionManager,
 	createSendImageTool,
@@ -24,7 +24,7 @@ import {
 import { createExecutionEnv } from "@arkham/chatbot-sandbox";
 import { QQAdapter, type QQConnectionState } from "@arkham/chatbot-im-qq";
 import type { ImAdapter } from "@arkham/chatbot-im-core";
-import type { BotRecord, MessageRepository } from "@arkham/chatbot-store";
+import type { BotRecord, MessageRepository, ConversationRepository, ScopeSummaryRepository, TrainingSampleRepository } from "@arkham/chatbot-store";
 import { createMessageRouter } from "./message-router.ts";
 import type { BotConfig, BotRuntimeInfo } from "./bot-config.ts";
 
@@ -51,6 +51,12 @@ export interface BotManagerOptions {
 	readonly thinkingLevel?: string;
 	/** 消息流水仓库（路由器入站/出站落库用）。可选。 */
 	readonly messages?: MessageRepository;
+	/** 会话完整归档仓库（含工具调用/结果，后台查阅/搜索/训练导出）。可选。 */
+	readonly conversations?: ConversationRepository;
+	/** scope 摘要仓库（dispose 压缩摘要，后台列表展示）。可选。 */
+	readonly scopeSummaries?: ScopeSummaryRepository;
+	/** 训练样本仓库（每次 run 完整快照，训练用）。可选。 */
+	readonly trainingSamples?: TrainingSampleRepository;
 	/** 技能源文件目录（宿主机绝对路径）。启动时加载，注入所有会话。 */
 	readonly skillsDir: string;
 	/** 提示词源文件目录（宿主机绝对路径，prompts/static/*.md）。启动时加载，fs.watch 热更新。 */
@@ -76,6 +82,11 @@ export interface BotManagerOptions {
 	 * 用于：改了提示词/技能/系统配置后，避免旧上下文污染新行为。
 	 */
 	readonly clearHistoryOnStart?: boolean;
+	/**
+	 * 私聊（C2C）流式输出开关：把 agent 每轮非工具文字实时流到 QQ stream_messages
+	 * 的 markdown 引用块。默认 true；false 时退回批量发送。
+	 */
+	readonly c2cStreaming?: boolean;
 	readonly logger?: Logger;
 	}
 
@@ -541,6 +552,61 @@ export class BotManager {
 				console.log(`[bot] 附件已下载 scope=${scope.kind}:${scope.id}${memberId ? ` member=${memberId}` : ""} → inbox/${filename} (${buffer.length} bytes)`);
 				return `inbox/${filename}`;
 			},
+			// 会话完整归档：runPrompt 成功后把本轮消息（含工具调用/结果）写入 conversations 表。
+			// 完整保留供后台查阅/搜索/训练导出；dispose 压缩 session.jsonl 不影响此归档。
+			archiveMessages: this.opts.conversations
+				? (messages, ctx) => {
+						const botId = config.id;
+						const inserts = messages.map((m) => agentMessageToConversationInsert(m, botId, ctx));
+						if (inserts.length > 0) this.opts.conversations!.insertMany(inserts);
+					}
+				: undefined,
+			// dispose 压缩后把 compactionSummary 摘要存 scope_summaries（后台列表展示）。
+			archiveScopeSummary: this.opts.scopeSummaries
+				? (summary, messageCount, ctx) => {
+						this.opts.scopeSummaries!.upsert({
+							botId: config.id,
+							scopeKind: ctx.scope.kind,
+							scopeId: ctx.scope.id,
+							memberId: ctx.memberId ?? null,
+							summary,
+							messageCount,
+						});
+					}
+				: undefined,
+			// 训练样本：组装完整自包含快照（systemPrompt + 本次 run 全部消息 + 元信息）。
+			archiveTrainingSample: this.opts.trainingSamples
+				? (sample, ctx) => {
+						// 组装完整自包含训练样本：systemPrompt + 本次 run 全部消息（含工具调用/结果/
+						// reasoning）+ 模型/参数元信息。assistant 的 reasoningContent 自定义字段已在
+						// non-stream-bridge 挂上，JSON.stringify 会带上。
+						const sampleJson = JSON.stringify({
+							runId: sample.runId,
+							systemPrompt: sample.systemPrompt,
+							userText: sample.userText,
+							messages: sample.messages,
+							model: this.opts.model.id,
+							thinkingLevel: this.opts.thinkingLevel ?? "off",
+							status: sample.status,
+							error: sample.error,
+							scope: { kind: ctx.scope.kind, id: ctx.scope.id, memberId: ctx.memberId },
+							timestamp: Date.now(),
+						});
+						const preview = sample.userText.replace(/^\[[^\]]+\]:\s*/, "").slice(0, 80);
+						this.opts.trainingSamples!.insert({
+							id: sample.runId,
+							botId: config.id,
+							scopeKind: ctx.scope.kind,
+							scopeId: ctx.scope.id,
+							memberId: ctx.memberId ?? null,
+							ts: Date.now(),
+							preview,
+							messageCount: sample.messages.length,
+							status: sample.status,
+							sampleJson,
+						});
+					}
+				: undefined,
 		});
 		sessions.start();
 
@@ -549,6 +615,7 @@ export class BotManager {
 			sessions,
 			botId: config.id,
 			messages: this.opts.messages,
+			c2cStreaming: this.opts.c2cStreaming ?? true,
 			logger: botLog,
 		});
 		const unsubscribe = adapter.subscribe(router);
@@ -601,3 +668,36 @@ export function recordToConfig(rec: BotRecord): BotConfig {
 
 // 重新导出，供 message-router 使用 IncomingMessage 类型推导。
 export type { IncomingMessage };
+
+/**
+ * 把一条 AgentMessage 转成 ConversationInsert（写入 conversations 归档表）。
+ * 提取 role / content / timestamp / stopReason / model，content 序列化为完整 JSON。
+ */
+function agentMessageToConversationInsert(
+	m: AgentMessage,
+	botId: string,
+	ctx: { scope: ScopeKey; memberId: string | undefined; runId: string },
+): import("@arkham/chatbot-store").ConversationInsert {
+	const msg = m as {
+		role?: string;
+		content?: unknown;
+		timestamp?: number;
+		stopReason?: string;
+		model?: string;
+	};
+	const role = msg.role ?? "unknown";
+	// timestamp：user/assistant 有；compactionSummary 等可能没有，兜底 Date.now()。
+	const ts = typeof msg.timestamp === "number" && msg.timestamp > 0 ? msg.timestamp : Date.now();
+	return {
+		botId,
+		scopeKind: ctx.scope.kind,
+		scopeId: ctx.scope.id,
+		memberId: ctx.memberId ?? null,
+		runId: ctx.runId,
+		ts,
+		role,
+		contentJson: JSON.stringify(msg.content ?? null),
+		stopReason: msg.stopReason ?? null,
+		model: msg.model ?? null,
+	};
+}

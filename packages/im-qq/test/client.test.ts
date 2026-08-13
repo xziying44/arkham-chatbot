@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { groupTarget, QQClient, userTarget } from "../src/client.ts";
 
@@ -159,4 +159,144 @@ test("令牌端点错误和缺失令牌会返回明确错误", async (t) => {
 
 	await assert.rejects(createClient().getAccessToken(), /getAppAccessToken failed: 503/);
 	await assert.rejects(createClient().getAccessToken(), /缺少有效令牌/);
+});
+
+// ---- stream_messages（C2C 流式）----
+
+/** 记录所有 stream_messages 请求并按序返回响应的 mock fetch。 */
+function mockStreamFetch(t: TestContext, slices: Array<{ id: string; remain?: number }>): {
+	requests: Array<{ url: string; body: Record<string, unknown> }>;
+} {
+	const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+	let sliceIdx = 0;
+	t.mock.method(globalThis, "fetch", async (input, init) => {
+		const url = String(input);
+		if (url === TOKEN_URL) return Response.json({ access_token: "valid-token", expires_in: "7200" });
+		const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+		requests.push({ url, body });
+		if (url.endsWith("/stream_messages")) {
+			const slice = slices[Math.min(sliceIdx, slices.length - 1)];
+			sliceIdx++;
+			return Response.json({ id: slice.id, timestamp: "2026-08-12T10:00:00+08:00", remain_msg_len: slice.remain ?? 3800 });
+		}
+		return Response.json({ id: "msg-x", timestamp: 123 });
+	});
+	return { requests };
+}
+
+test("startStream 在 user scope 发首片并返回 StreamSession", async (t) => {
+	const { requests } = mockStreamFetch(t, [{ id: "stream-id-1" }]);
+	const client = createClient();
+	const session = await client.startStream(userTarget("user-id"), {
+		msgId: "msg-1",
+		contentType: "markdown",
+		firstContent: "> 💭 ",
+	});
+
+	assert.equal(requests.length, 1);
+	const first = requests[0];
+	assert.equal(first.url, "https://api.example.com/v2/users/user-id/stream_messages");
+	assert.equal(first.body.index, 0);
+	assert.equal(first.body.input_state, 1);
+	assert.equal(first.body.input_mode, "append");
+	assert.equal(first.body.content_type, "markdown");
+	assert.equal(first.body.content_raw, "> 💭 ");
+	assert.equal(first.body.msg_id, "msg-1");
+	assert.equal(first.body.stream_msg_id, undefined);
+	// msg_seq 自增
+	assert.equal(first.body.msg_seq, 1);
+	// 返回的 session 已携带首片返回的 stream_msg_id
+	void session;
+});
+
+test("startStream 在 group scope 抛错（防御）", async (t) => {
+	t.mock.method(globalThis, "fetch", async (input) => {
+		if (String(input) === TOKEN_URL) return Response.json({ access_token: "t", expires_in: "7200" });
+		return Response.json({});
+	});
+	const client = createClient();
+	await assert.rejects(
+		client.startStream(groupTarget("g"), { msgId: "m" }),
+		/仅支持 C2C/,
+	);
+});
+
+test("StreamSession.append 递增 index 并携带 stream_msg_id + content_type + msg_id（真机压测确认续片必带 msg_id）", async (t) => {
+	const { requests } = mockStreamFetch(t, [{ id: "stream-1" }, { id: "stream-1" }, { id: "stream-1" }]);
+	const client = createClient();
+	const session = await client.startStream(userTarget("u"), { msgId: "msg-x", firstContent: "> 💭 " });
+	await session.append("第一段思考");
+	await session.append("第二段思考");
+
+	// 0=首片，1/2=两次 append
+	assert.equal(requests.length, 3);
+	const a1 = requests[1];
+	const a2 = requests[2];
+	assert.equal(a1.body.index, 1);
+	assert.equal(a1.body.input_state, 1);
+	assert.equal(a1.body.input_mode, "append");
+	assert.equal(a1.body.content_raw, "第一段思考");
+	assert.equal(a1.body.stream_msg_id, "stream-1");
+	// 续片必带 content_type + msg_id（缺 msg_id → 服务端 50001）
+	assert.equal(a1.body.content_type, "markdown");
+	assert.equal(a1.body.msg_id, "msg-x");
+	assert.equal(a2.body.index, 2);
+	assert.equal(a2.body.content_raw, "第二段思考");
+});
+
+test("StreamSession.finish 发末片（input_state=10，空正文）", async (t) => {
+	const { requests } = mockStreamFetch(t, [{ id: "s1" }, { id: "s1" }]);
+	const client = createClient();
+	const session = await client.startStream(userTarget("u"), { firstContent: "> 💭 " });
+	await session.finish();
+
+	// 末片是第 2 个请求
+	assert.equal(requests.length, 2);
+	const last = requests[1];
+	assert.equal(last.body.input_state, 10);
+	assert.equal(last.body.input_mode, "append");
+	assert.equal(last.body.content_raw, "");
+	assert.equal(last.body.stream_msg_id, "s1");
+});
+
+test("StreamSession.finish 幂等：多次调用只发一次末片", async (t) => {
+	const { requests } = mockStreamFetch(t, [{ id: "s1" }, { id: "s1" }]);
+	const client = createClient();
+	const session = await client.startStream(userTarget("u"), { firstContent: "> 💭 " });
+	await session.finish();
+	await session.finish();
+	await session.finish();
+	// 只有首片 + 一次末片
+	assert.equal(requests.length, 2);
+});
+
+test("StreamSession.append 失败后停止后续流式（标记结束）", async (t) => {
+	let sliceIdx = 0;
+	t.mock.method(globalThis, "fetch", async (input) => {
+		const url = String(input);
+		if (url === TOKEN_URL) return Response.json({ access_token: "t", expires_in: "7200" });
+		sliceIdx++;
+		if (sliceIdx === 2) {
+			// 第二片（第一个 append）失败
+			return new Response("限流", { status: 429 });
+		}
+		return Response.json({ id: "s1", timestamp: "t" });
+	});
+	const client = createClient();
+	const session = await client.startStream(userTarget("u"), { firstContent: "> 💭 " });
+	// 第一次 append 失败
+	await session.append("第一段");
+	// 第二次 append 应该是 no-op（已标记结束）
+	const result = await session.append("第二段");
+	assert.equal(result, undefined);
+});
+
+test("StreamSession 服务端返回新 stream_msg_id 会更新（容错）", async (t) => {
+	const { requests } = mockStreamFetch(t, [{ id: "first-id" }, { id: "updated-id" }, { id: "updated-id" }]);
+	const client = createClient();
+	const session = await client.startStream(userTarget("u"), { firstContent: "> 💭 " });
+	// 第二次响应返回了新 id，后续请求应该用新 id
+	await session.append("delta1");
+	await session.append("delta2");
+	assert.equal(requests[2].body.stream_msg_id, "updated-id");
 });
