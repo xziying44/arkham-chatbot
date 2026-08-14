@@ -7,6 +7,9 @@ dist/
 
 # Runtime data (每群工作目录、会话记录、记忆)
 data/
+# 例外：deck-renderer 的源码数据层（非运行时数据）
+!packages/deck-renderer/src/data/
+!packages/deck-renderer/src/data/**
 
 # Environment
 .env
