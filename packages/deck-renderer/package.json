@@ -1,8 +1,9 @@
 {
-  "name": "@arkham/chatbot-core",
+  "name": "@arkham/deck-renderer",
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "description": "卡组分享渲染引擎 — 数据驱动的排班表(DekLayout) → PNG，可被智能体自由编排",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -14,14 +15,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "test": "node --test --import tsx test/*.test.ts"
+    "test": "node --test --import tsx test/*.test.ts",
+    "cli": "tsx src/cli.ts",
+    "stress": "tsx src/stress.ts"
   },
   "dependencies": {
-    "@arkham/chatbot-sandbox": "workspace:*",
-    "@earendil-works/pi-agent-core": "^0.83.0",
-    "@earendil-works/pi-ai": "^0.83.0",
-    "typebox": "^1.3.7",
-    "@arkham/deck-renderer": "workspace:*"
+    "@napi-rs/canvas": "^1.0.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

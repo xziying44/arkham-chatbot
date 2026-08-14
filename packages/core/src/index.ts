@@ -24,6 +24,15 @@ export { createLoadSkillTool } from "./tools/load-skill.ts";
 export type { CreateLoadSkillToolOptions } from "./tools/load-skill.ts";
 export { createSearchCardsTool } from "./tools/search-cards.ts";
 export type { CreateSearchCardsToolOptions, SearchCardsInput } from "./tools/search-cards.ts";
+export { createDeckTools, createImportDeckTool, createRenderDeckTool } from "./tools/deck-tools.ts";
+export type {
+	CreateDeckToolsOptions,
+	DeckToolContext,
+	ImportDeckInput,
+	ImportDeckDetails,
+	RenderDeckInput,
+	RenderDeckDetails,
+} from "./tools/deck-tools.ts";
 export { createGenerateImageTool, buildArtPrompt, typeDefaults } from "./tools/generate-image.ts";
 export type { CreateGenerateImageToolOptions, GenerateImageInput } from "./tools/generate-image.ts";
 export { loadCardIndex, searchCards } from "./tools/search-cards-index.ts";

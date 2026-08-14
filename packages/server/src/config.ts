@@ -55,6 +55,14 @@ export interface AppConfig {
 	 */
 	readonly cardDatabaseDir?: string;
 	/**
+	 * 社区数据库 arkhamdb-json-data 根目录（标准 ArkhamDB 字段：type_code/faction_code/
+	 * permanent/slot/restrictions，供卡组分类）。配置后（连同 cardDatabaseDir、deckFontsDir）
+	 * 装配 import_deck / render_deck 卡组分享工具。未配置则不装配（优雅降级）。
+	 */
+	readonly arkhamdbDataDir?: string;
+	/** 卡组分享渲染的中文字体目录（思源黑体 source-han-sans.ttf、汉仪小隶书简）。 */
+	readonly deckFontsDir?: string;
+	/**
 	 * MiniMax 文生图（generate_image 工具）。配置了 apiKey 才装配该工具。
 	 * key 只存在于宿主机进程内存（由 .env 注入），不进沙箱——沙箱断网 + 命令护栏
 	 * 双重隔离，agent 只能拿到生成结果图。
@@ -85,6 +93,12 @@ export interface AppConfig {
 	 * 默认 true；出问题时设 false 一键退回批量发送。
 	 */
 	readonly c2cStreaming: boolean;
+	/**
+	 * LLM 原生 SSE 流式开关（实验性）。true 时绕开 non-stream-bridge 用原生 streaming，
+	 * 实现真逐字打字机。但 DeepSeek 流式模式有已知 bug（工具参数空、reasoning-only），
+	 * 默认 false 稳妥；仅 dev 压测用。
+	 */
+	readonly nativeStreaming: boolean;
 }
 
 function optional(name: string): string | undefined {
@@ -133,6 +147,11 @@ export function loadConfig(): AppConfig {
 		arkhamAssetsDir: optional("ARKHAM_ASSETS_DIR")
 			?? (arkhamWorkshopDir ? resolve(arkhamWorkshopDir, "assets") : undefined),
 		cardDatabaseDir: optional("CHATBOT_CARD_DATABASE_DIR"),
+		// 卡组分享工具（import_deck/render_deck）的数据源：
+		// arkhamdb-json-data 提供标准字段（type_code/permanent/slot/restrictions），字体目录提供中文字体。
+		// 两者都配置（连同 cardDatabaseDir）才装配卡组工具，否则优雅降级不装配。
+		arkhamdbDataDir: optional("CHATBOT_ARKHAMDB_DATA_DIR"),
+		deckFontsDir: optional("CHATBOT_DECK_FONTS_DIR"),
 		minimax: (() => {
 			const apiKey = optional("MINIMAX_API_KEY");
 			return apiKey ? { apiKey, apiBase: optional("MINIMAX_API_BASE") } : undefined;
@@ -172,6 +191,7 @@ export function loadConfig(): AppConfig {
 			password: optional("ADMIN_PASSWORD"),
 		},
 		c2cStreaming: bool("QQ_C2C_STREAMING", true),
+		nativeStreaming: bool("LLM_NATIVE_STREAMING", false),
 	};
 }
 

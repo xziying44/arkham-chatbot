@@ -12,6 +12,7 @@ import {
 	createAskUserTool,
 	createSearchCardsTool,
 	createGenerateImageTool,
+	createDeckTools,
 	createLogger,
 	loadCardIndex,
 	loadSkillsFromDir,
@@ -72,6 +73,13 @@ export interface BotManagerOptions {
 	 * 未配置则 search_cards 不装配。
 	 */
 	readonly cardDatabaseDir?: string;
+	/**
+	 * 社区数据库 arkhamdb-json-data 根目录（卡组分类用标准字段）。
+	 * 与 cardDatabaseDir、deckFontsDir 都配置时装配 import_deck / render_deck 卡组分享工具。
+	 */
+	readonly arkhamdbDataDir?: string;
+	/** 卡组分享渲染的中文字体目录（宿主机绝对路径）。 */
+	readonly deckFontsDir?: string;
 	/**
 	 * MiniMax 文生图配置。配置了 apiKey 才装配 generate_image 工具。
 	 * key 仅注入工具闭包（宿主机进程内执行），不写入沙箱文件/环境变量。
@@ -517,6 +525,20 @@ export class BotManager {
 				// search_cards：索引加载成功才装配（优雅降级）。
 				if (this.opts.cardDatabaseDir && this.cardIndex.length > 0) {
 					tools.push(createSearchCardsTool({ databaseDir: this.opts.cardDatabaseDir }));
+				}
+				// 卡组分享工具（import_deck + render_deck）：三个数据路径都配置才装配（优雅降级）。
+				// 工具在宿主机进程执行（读本地卡图/字体/在线 API），产物写 workspace/decks/。
+				if (this.opts.cardDatabaseDir && this.opts.arkhamdbDataDir && this.opts.deckFontsDir) {
+					tools.push(
+						...createDeckTools({
+							workspaceDir,
+							deck: {
+								cardDatabaseDir: this.opts.cardDatabaseDir,
+								arkhamdbDataDir: this.opts.arkhamdbDataDir,
+								fontsDir: this.opts.deckFontsDir,
+							},
+						}),
+					);
 				}
 				// generate_image：配置了 MiniMax key 才装配（优雅降级）。
 				// 工具在宿主机进程内调 API，key 不进沙箱；生成图落到 workspace/generated/，

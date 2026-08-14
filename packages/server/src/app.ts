@@ -123,6 +123,9 @@ export async function startApp(): Promise<AppRuntime> {
 
 	// 多机器人编排器。兼容端点走非流式桥接，避免 SSE 只发心跳却永不结束时
 	// SDK 请求超时失效；其它原生 API 仍使用 streamSimple。
+	// LLM_NATIVE_STREAMING=true 时绕开非流式桥接用原生 SSE（真逐字流式，但 DeepSeek
+	// 流式模式有已知 bug：推理模型只输出 reasoning、stream+thinking+tool_use 工具参数空）。
+	// 默认 false（稳定）；dev 压测真流式效果时设 true。
 	const LLM_TIMEOUT_MS = 120_000;
 	const LLM_MAX_RETRIES = 3;
 	const nativeStreamFn = (model: Model<any>, context: any, options?: any) =>
@@ -132,7 +135,8 @@ export async function startApp(): Promise<AppRuntime> {
 			maxRetries: LLM_MAX_RETRIES,
 			maxRetryDelayMs: 8_000,
 		});
-	const streamFn = createNonStreamStreamFn(nativeStreamFn);
+	const streamFn = config.nativeStreaming ? nativeStreamFn : createNonStreamStreamFn(nativeStreamFn);
+	console.log(`[app] streamFn 模式: ${config.nativeStreaming ? "原生 SSE 流式" : "非流式桥接（默认）"}`);
 	const botManager = new BotManager({
 		dataRoot: config.dataDir,
 		model,
@@ -151,6 +155,8 @@ export async function startApp(): Promise<AppRuntime> {
 		arkhamBinPath: config.arkhamBinPath,
 		arkhamAssetsDir: config.arkhamAssetsDir,
 		cardDatabaseDir: config.cardDatabaseDir,
+		arkhamdbDataDir: config.arkhamdbDataDir,
+		deckFontsDir: config.deckFontsDir,
 		minimax: config.minimax,
 		clearHistoryOnStart: config.clearHistoryOnStart,
 		c2cStreaming: config.c2cStreaming,
