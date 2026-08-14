@@ -203,3 +203,26 @@ test("非对象输入：报错", () => {
 	assert.ok(hasCardErrors(validateCard(null)));
 	assert.ok(hasCardErrors(validateCard([1, 2])));
 });
+
+test("合法的场景卡背/密谋卡背：0 error", () => {
+	const actBack = validateCard({
+		type: "场景卡背",
+		name: "深入调查",
+		serial_number: "1b",
+		victory: null,
+		body: "（翻面后的正文效果）",
+		flavor: "风味文字",
+		language: "zh",
+	});
+	assert.equal(hasCardErrors(actBack), false, formatCardErrors(actBack));
+
+	const agendaBack = validateCard({
+		type: "密谋卡背",
+		name: "别墅锁死",
+		serial_number: "1b",
+		victory: 1,
+		body: "",
+		language: "zh",
+	});
+	assert.equal(hasCardErrors(agendaBack), false, formatCardErrors(agendaBack));
+});
